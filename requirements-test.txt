@@ -1,0 +1,17 @@
+# Testing dependencies for jailexec plugin
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+coverage>=7.0.0
+
+# Mock and testing utilities
+mock>=4.0.0
+
+# Code quality tools
+flake8>=6.0.0
+pylint>=2.15.0
+black>=23.0.0
+isort>=5.12.0
+
+# Development dependencies
+tox>=4.0.0

@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+        ansible-version: ['2.9', '4.0', '5.0', '6.0', '7.0']
+        exclude:
+          # Ansible 7.0+ requires Python 3.9+
+          - python-version: '3.8'
+            ansible-version: '7.0'
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements-test.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ansible==${{ matrix.ansible-version }}.*
+        pip install -r requirements-test.txt
+    
+    - name: Lint with flake8
+      run: |
+        flake8 jailexec.py --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 jailexec.py --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Test with pytest
+      run: |
+        pytest --cov=jailexec --cov-report=xml
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+    
+    - name: Run security scan with Bandit
+      run: |
+        bandit -r jailexec.py -f json -o bandit-report.json || true
+    
+    - name: Check for known vulnerabilities
+      run: |
+        safety check --json || true
+
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install quality tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install black isort pylint mypy
+        pip install -r requirements-test.txt
+    
+    - name: Check code formatting with Black
+      run: |
+        black --check --diff jailexec.py
+    
+    - name: Check import sorting with isort
+      run: |
+        isort --check-only --diff jailexec.py
+    
+    - name: Lint with pylint
+      run: |
+        pylint jailexec.py --exit-zero
+    
+    - name: Type check with mypy
+      run: |
+        mypy jailexec.py --ignore-missing-imports || true
