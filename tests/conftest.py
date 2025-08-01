@@ -19,10 +19,14 @@ class MockPlayContext:
         self.remote_user = remote_user
         self.port = port
         self.shell = None
+        self.executable = None
         
     def copy(self):
         """Create a copy of the play context."""
-        return MockPlayContext(self.remote_addr, self.remote_user, self.port)
+        new_context = MockPlayContext(self.remote_addr, self.remote_user, self.port)
+        new_context.shell = self.shell
+        new_context.executable = self.executable
+        return new_context
 
 
 class MockSSHConnection:

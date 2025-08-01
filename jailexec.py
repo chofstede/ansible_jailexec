@@ -49,11 +49,11 @@ __metaclass__ = type
 import os
 import re
 import shlex
-import tempfile
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Callable, Tuple, Union
 
 from ansible.errors import AnsibleConnectionFailure, AnsibleError
+from ansible.playbook.play_context import PlayContext
 from ansible.plugins.connection.ssh import Connection as SSHConnection
 from ansible.utils.display import Display
 
@@ -115,7 +115,7 @@ def retry_on_failure(
     max_attempts: int = MAX_RETRY_ATTEMPTS,
     delay: float = RETRY_DELAY,
     exceptions: Tuple = (AnsibleConnectionFailure,),
-) -> callable:
+) -> Callable:
     """Decorator to retry functions on transient failures with exponential backoff."""
 
     def decorator(func):
@@ -163,7 +163,7 @@ DOCUMENTATION = """
             vars:
                 - name: ansible_ssh_executable
         sftp_executable:
-            description: Location of SFTP executable  
+            description: Location of SFTP executable
             default: 'sftp'
             vars:
                 - name: ansible_sftp_executable
@@ -235,7 +235,7 @@ DOCUMENTATION = """
             default: 3
             vars:
                 - name: ansible_ssh_reconnection_retries
-        
+
         # Jail-specific options
         jail_name:
             description: Name of the jail to connect to
@@ -272,15 +272,15 @@ DOCUMENTATION = """
         - File transfers use a two-stage process for proper permission handling
         - Connection pooling improves performance for multiple operations
         - All paths starting with ~ are converted to use the remote_tmp directory
-        
+
     seealso:
-        - name: FreeBSD Jails Handbook  
+        - name: FreeBSD Jails Handbook
           description: Official FreeBSD documentation on jails
           link: https://docs.freebsd.org/en/books/handbook/jails/
         - name: Ansible SSH Connection Plugin
           description: Base SSH plugin documentation
           link: https://docs.ansible.com/ansible/latest/plugins/connection/ssh.html
-          
+
     examples:
         - name: Inventory configuration for jail management
           description: |
@@ -289,11 +289,11 @@ DOCUMENTATION = """
             # inventory/hosts
             [jail_hosts]
             freebsd-host.example.com ansible_connection=ssh ansible_user=admin
-            
+
             [jails]
-            web-jail ansible_connection=jailexec ansible_jail_host=freebsd-host.example.com 
+            web-jail ansible_connection=jailexec ansible_jail_host=freebsd-host.example.com
             db-jail  ansible_connection=jailexec ansible_jail_host=freebsd-host.example.com
-            
+
         - name: Playbook using jail connection
           description: |
             Execute tasks inside jails using the jailexec connection plugin
@@ -305,12 +305,12 @@ DOCUMENTATION = """
                   package:
                     name: nginx
                     state: present
-                    
+
                 - name: Copy configuration file to jail
                   copy:
                     src: nginx.conf
                     dest: /usr/local/etc/nginx/nginx.conf
-                    
+
                 - name: Start service in jail
                   service:
                     name: nginx
@@ -348,6 +348,8 @@ class Connection(SSHConnection):
 
     transport = "jailexec"
     has_pipelining = True
+
+    _play_context: PlayContext
 
     def __init__(self, play_context, new_stdin, *args, **kwargs):
         """Initialize the jail connection with security validation."""
