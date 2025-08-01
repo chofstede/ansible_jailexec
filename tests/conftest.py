@@ -18,8 +18,8 @@ class MockPlayContext:
         self.remote_addr = remote_addr
         self.remote_user = remote_user
         self.port = port
-        self.shell = None
-        self.executable = None
+        self.shell = 'sh'
+        self.executable = '/bin/sh'
         
     def copy(self):
         """Create a copy of the play context."""
