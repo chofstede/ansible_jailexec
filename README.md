@@ -1,8 +1,9 @@
 # Ansible FreeBSD Jail Connection Plugin
 
 [![License: BSD-2-Clause](https://img.shields.io/badge/License-BSD%202--Clause-orange.svg)](https://opensource.org/licenses/BSD-2-Clause)
-[![Python: 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python: 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Ansible: 2.9+](https://img.shields.io/badge/ansible-2.9+-red.svg)](https://docs.ansible.com/)
+[![CI](https://github.com/chofstede/ansible_jailexec/workflows/CI/badge.svg)](https://github.com/chofstede/ansible_jailexec/actions)
 
 A robust Ansible connection plugin that enables task execution inside FreeBSD jails by connecting to the jail host via SSH and using `jexec` to run commands within the jail container.
 
@@ -16,9 +17,15 @@ A robust Ansible connection plugin that enables task execution inside FreeBSD ja
 - 🧪 **Well-Tested**: Comprehensive unit test suite with 85%+ code coverage
 - 📖 **Well-Documented**: Extensive documentation and examples
 
+## Demo
+
+![Plugin in Action](screenshot.png)
+
+*The plugin in action: executing Ansible tasks inside FreeBSD jails via the jailexec connection plugin*
+
 ## Requirements
 
-- **Control Machine**: Python 3.7+, Ansible 2.9+
+- **Control Machine**: Python 3.8+, Ansible 2.9+
 - **Jail Host**: FreeBSD system with running jails
 - **Privileges**: SSH access with `doas` or `sudo` configured for jail management
 - **Commands**: `jls`, `jexec` available on jail host
