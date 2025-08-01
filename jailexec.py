@@ -103,12 +103,26 @@ def validate_jail_name(jail_name: str) -> None:
 
 
 def validate_path_security(path: str) -> None:
-    """Validate file paths to prevent directory traversal attacks."""
-    if not path:
+    """Validate file paths to prevent security attacks."""
+    if not path or not path.strip():
+        if path and path.strip() != path:  # Whitespace-only paths
+            raise AnsibleError(f"Path contains dangerous pattern (whitespace-only): {repr(path)}")
         return
 
-    if ".." in path:
-        raise AnsibleError(f"Path contains directory traversal: {path}")
+    # Security validation for dangerous patterns
+    dangerous_patterns = [
+        "..",  # Directory traversal
+        "$(",  # Command substitution
+        "`",  # Command substitution
+        "|",  # Pipe operations
+        ";",  # Command separation
+        "&",  # Background processes
+        "(",  # Function calls or subshells
+    ]
+
+    for pattern in dangerous_patterns:
+        if pattern in path:
+            raise AnsibleError(f"Path contains dangerous pattern '{pattern}': {path}")
 
 
 def retry_on_failure(
@@ -399,9 +413,7 @@ class Connection(SSHConnection):
             if jail_user:
                 jail_user = jail_user.strip()
                 if not jail_user or jail_user.isspace():
-                    raise AnsibleConnectionFailure(
-                        "jail_user cannot be empty or whitespace"
-                    )
+                    raise AnsibleConnectionFailure("jail_user cannot be empty or whitespace")
                 self.jail_user = jail_user
 
             privilege_escalation = self.get_option("privilege_escalation")
@@ -422,6 +434,10 @@ class Connection(SSHConnection):
                     raise AnsibleConnectionFailure(
                         f"remote_tmp contains path traversal: {remote_tmp}"
                     )
+                if not remote_tmp.startswith("/"):
+                    raise AnsibleConnectionFailure(
+                        f"remote_tmp must be an absolute path: {remote_tmp}"
+                    )
                 self.remote_tmp = remote_tmp
 
             timeout = self.get_option("timeout")
@@ -434,9 +450,7 @@ class Connection(SSHConnection):
         except AnsibleConnectionFailure:
             raise
         except Exception as e:
-            raise AnsibleConnectionFailure(
-                f"Configuration error for jail '{self.jail_name}': {e}"
-            )
+            raise AnsibleConnectionFailure(f"Configuration error for jail '{self.jail_name}': {e}")
 
     @retry_on_failure(max_attempts=3, exceptions=(AnsibleConnectionFailure,))
     def _create_ssh_connection(self) -> SSHConnection:
@@ -543,14 +557,10 @@ class Connection(SSHConnection):
         Raises:
             AnsibleConnectionFailure: If jail is not accessible
         """
-        display.vvv(
-            f"jailexec: Verifying jail access: {self.jail_name}", host=self.jail_name
-        )
+        display.vvv(f"jailexec: Verifying jail access: {self.jail_name}", host=self.jail_name)
 
         if not self._host_connection:
-            raise AnsibleConnectionFailure(
-                "No SSH connection available for jail verification"
-            )
+            raise AnsibleConnectionFailure("No SSH connection available for jail verification")
 
         # Test jail accessibility with a simple command
         test_cmd = f"{self.privilege_escalation} jls -j {shlex.quote(self.jail_name)}"
@@ -558,9 +568,7 @@ class Connection(SSHConnection):
         try:
             result = self._host_connection.exec_command(test_cmd)
         except Exception as e:
-            raise AnsibleConnectionFailure(
-                f"Failed to execute jail verification command: {e}"
-            )
+            raise AnsibleConnectionFailure(f"Failed to execute jail verification command: {e}")
 
         if result[0] != 0:
             error_msg = self._decode_output(result[2]) if result[2] else "Unknown error"
@@ -585,9 +593,7 @@ class Connection(SSHConnection):
                     f"Ensure {self.privilege_escalation} is configured for jail management commands."
                 )
 
-            raise AnsibleConnectionFailure(
-                f"Cannot access jail '{self.jail_name}': {error_msg}"
-            )
+            raise AnsibleConnectionFailure(f"Cannot access jail '{self.jail_name}': {error_msg}")
 
     def _decode_output(self, output: Union[str, bytes]) -> str:
         """
@@ -603,25 +609,53 @@ class Connection(SSHConnection):
             return output.decode("utf-8", errors="replace")
         return output
 
-    def _transform_path(self, path: str) -> str:
+    def _validate_command_security(self, command: str) -> None:
+        """Validate command strings for dangerous patterns."""
+        if not command:
+            return
+
+        # Only validate for directory traversal - other patterns are too restrictive
+        # for legitimate Ansible-generated commands
+        if ".." in command:
+            raise AnsibleError(f"Path contains dangerous pattern '..': {command}")
+
+    def _transform_path_only(self, path: str) -> str:
         """Transform home directory references to jail-appropriate paths."""
         if not path:
             return path
 
-        return re.sub(r"~[^/\s]*/", self.remote_tmp.rstrip("/") + "/", path)
+        return re.sub(r"(^|\s)~[^/\s]*/", r"\1" + self.remote_tmp.rstrip("/") + "/", path)
+
+    def _transform_path(self, path: str) -> str:
+        """Transform home directory references to jail-appropriate paths with security validation."""
+        if not path:
+            return path
+
+        # Security validation for dangerous patterns
+        dangerous_patterns = [
+            "..",  # Directory traversal
+            "$(",  # Command substitution
+            "`",  # Command substitution
+            "|",  # Pipe operations
+            ";",  # Command separation
+            "&",  # Background processes
+            "(",  # Function calls or subshells
+        ]
+
+        for pattern in dangerous_patterns:
+            if pattern in path:
+                raise AnsibleError(f"Path contains dangerous pattern '{pattern}': {path}")
+
+        return re.sub(r"(^|\s)~[^/\s]*/", r"\1" + self.remote_tmp.rstrip("/") + "/", path)
 
     def _get_jail_root(self) -> str:
         """Get the jail root directory path with caching."""
         if self._jail_root_cache:
             return self._jail_root_cache
 
-        display.vvv(
-            f"jailexec: Determining jail root for {self.jail_name}", host=self.jail_name
-        )
+        display.vvv(f"jailexec: Determining jail root for {self.jail_name}", host=self.jail_name)
 
-        jail_root_cmd = (
-            f"{self.privilege_escalation} jls -j {shlex.quote(self.jail_name)} path"
-        )
+        jail_root_cmd = f"{self.privilege_escalation} jls -j {shlex.quote(self.jail_name)} path"
         result = self._host_connection.exec_command(jail_root_cmd)
 
         if result[0] != 0:
@@ -668,6 +702,8 @@ class Connection(SSHConnection):
             cmd_str = " ".join(shlex.quote(str(arg)) for arg in cmd if arg is not None)
         else:
             cmd_str = str(cmd).strip()
+            # Only validate string commands for dangerous patterns (list commands are safely quoted)
+            self._validate_command_security(cmd_str)
 
         if not cmd_str:
             raise AnsibleError("Command cannot be empty")
@@ -677,8 +713,8 @@ class Connection(SSHConnection):
             host=self.jail_name,
         )
 
-        # Transform paths in command for jail filesystem
-        cmd_str = self._transform_path(cmd_str)
+        # Transform paths in command for jail filesystem (without security validation)
+        cmd_str = self._transform_path_only(cmd_str)
 
         # Build jail execution command
         jail_cmd_parts = [self.privilege_escalation, "jexec"]
@@ -693,9 +729,7 @@ class Connection(SSHConnection):
         # Build final command
         final_cmd = " ".join(shlex.quote(part) for part in jail_cmd_parts)
 
-        display.vvv(
-            f"jailexec: Executing on jail host: {final_cmd}", host=self.jail_name
-        )
+        display.vvv(f"jailexec: Executing on jail host: {final_cmd}", host=self.jail_name)
 
         # Execute via SSH connection to jail host with error handling
         try:
@@ -713,9 +747,7 @@ class Connection(SSHConnection):
             return result
 
         except Exception as e:
-            raise AnsibleError(
-                f"Failed to execute command in jail '{self.jail_name}': {e}"
-            )
+            raise AnsibleError(f"Failed to execute command in jail '{self.jail_name}': {e}")
 
     def put_file(self, in_path: str, out_path: str) -> None:
         """
@@ -751,14 +783,10 @@ class Connection(SSHConnection):
 
             # Ensure target directory exists
             target_dir = os.path.dirname(full_out_path)
-            mkdir_cmd = (
-                f"{self.privilege_escalation} mkdir -p {shlex.quote(target_dir)}"
-            )
+            mkdir_cmd = f"{self.privilege_escalation} mkdir -p {shlex.quote(target_dir)}"
             result = self._host_connection.exec_command(mkdir_cmd)
             if result[0] != 0:
-                error_msg = (
-                    self._decode_output(result[2]) if result[2] else "Unknown error"
-                )
+                error_msg = self._decode_output(result[2]) if result[2] else "Unknown error"
                 raise AnsibleError(f"Failed to create target directory: {error_msg}")
 
             # Create unique temporary file with secure permissions
@@ -786,12 +814,8 @@ class Connection(SSHConnection):
                 move_cmd = f"{self.privilege_escalation} mv {shlex.quote(temp_file)} {shlex.quote(full_out_path)}"
                 result = self._host_connection.exec_command(move_cmd)
                 if result[0] != 0:
-                    error_msg = (
-                        self._decode_output(result[2]) if result[2] else "Unknown error"
-                    )
-                    raise AnsibleError(
-                        f"Failed to move file to jail directory: {error_msg}"
-                    )
+                    error_msg = self._decode_output(result[2]) if result[2] else "Unknown error"
+                    raise AnsibleError(f"Failed to move file to jail directory: {error_msg}")
 
                 display.vvv(
                     f"jailexec: File successfully copied to {full_out_path}",

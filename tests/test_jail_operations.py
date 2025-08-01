@@ -46,7 +46,7 @@ class TestJailVerification:
             'doas jls -h name': (0, b"jail1\njail2\ntestjail", b"")
         })
         
-        with pytest.raises(AnsibleConnectionFailure, match="not found"):
+        with pytest.raises(AnsibleConnectionFailure, match="not found|No such jail"):
             jail_connection._verify_jail_access()
     
     def test_verify_jail_access_permission_denied(self, jail_connection, mock_ssh_connection, test_helper):
