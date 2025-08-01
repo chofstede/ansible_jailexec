@@ -20,7 +20,6 @@ A robust Ansible connection plugin that enables task execution inside FreeBSD ja
 ## Demo
 
 ![Plugin in Action](screenshot.png)
-
 *The plugin in action: executing Ansible tasks inside FreeBSD jails via the jailexec connection plugin*
 
 ## Requirements
