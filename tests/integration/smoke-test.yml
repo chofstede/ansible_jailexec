@@ -1,0 +1,95 @@
+---
+- name: Smoke tests for jailexec connection plugin
+  hosts: testjail
+  gather_facts: no
+  tasks:
+    - name: Test basic connectivity with ping
+      ansible.builtin.ping:
+      register: ping_result
+
+    - name: Display ping result
+      ansible.builtin.debug:
+        var: ping_result
+
+    - name: Get hostname inside jail
+      ansible.builtin.command: hostname
+      register: hostname_result
+      changed_when: false
+
+    - name: Display hostname
+      ansible.builtin.debug:
+        msg: "Jail hostname: {{ hostname_result.stdout }}"
+
+    - name: Check FreeBSD version
+      ansible.builtin.command: uname -a
+      register: uname_result
+      changed_when: false
+
+    - name: Display system information
+      ansible.builtin.debug:
+        msg: "System info: {{ uname_result.stdout }}"
+
+    - name: Test Python availability in jail
+      ansible.builtin.command: "{{ ansible_python_interpreter | default('/usr/local/bin/python3') }} --version"
+      register: python_version
+      changed_when: false
+
+    - name: Display Python version
+      ansible.builtin.debug:
+        msg: "Python version: {{ python_version.stdout }}"
+
+    - name: Verify doas privilege escalation works
+      ansible.builtin.command: whoami
+      become: yes
+      register: whoami_root
+      changed_when: false
+
+    - name: Assert running as root with doas
+      ansible.builtin.assert:
+        that:
+          - whoami_root.stdout == "root"
+        fail_msg: "Privilege escalation with doas failed"
+
+    - name: Test file creation in jail
+      ansible.builtin.file:
+        path: /tmp/ansible-test-{{ ansible_date_time.epoch }}
+        state: touch
+      register: file_creation
+
+    - name: Verify file was created
+      ansible.builtin.stat:
+        path: "{{ file_creation.path }}"
+      register: file_stat
+
+    - name: Assert file exists
+      ansible.builtin.assert:
+        that:
+          - file_stat.stat.exists
+        fail_msg: "Test file was not created successfully"
+
+    - name: Clean up test file
+      ansible.builtin.file:
+        path: "{{ file_creation.path }}"
+        state: absent
+
+    - name: Test command with specific working directory
+      ansible.builtin.command: pwd
+      args:
+        chdir: /tmp
+      register: pwd_result
+      changed_when: false
+
+    - name: Verify working directory
+      ansible.builtin.assert:
+        that:
+          - pwd_result.stdout == "/tmp"
+        fail_msg: "Working directory was not set correctly"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          All smoke tests passed successfully!
+          - Ping: {{ ping_result.ping }}
+          - Hostname: {{ hostname_result.stdout }}
+          - File operations: Success
+          - Command execution: Success

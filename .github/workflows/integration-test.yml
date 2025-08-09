@@ -1,0 +1,70 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  freebsd-jail-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install Ansible
+      run: |
+        python -m pip install --upgrade pip
+        pip install ansible paramiko
+    
+    - name: Set up SSH key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.FREEBSD_SSH_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        echo "${{ secrets.FREEBSD_HOST_KEY }}" >> ~/.ssh/known_hosts
+    
+    - name: Create test inventory
+      run: |
+        cat > test-inventory.ini << 'EOF'
+        [jails]
+        testjail ansible_host=${{ secrets.FREEBSD_HOST }} ansible_user=${{ secrets.FREEBSD_USER }} ansible_connection=jailexec ansible_python_interpreter=/usr/local/bin/python3
+        
+        [jails:vars]
+        ansible_ssh_private_key_file=~/.ssh/id_rsa
+        ansible_ssh_common_args='-o StrictHostKeyChecking=yes'
+        ansible_become_method=doas
+        ansible_become=yes
+        EOF
+    
+    - name: Test SSH connectivity to host
+      run: |
+        ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=yes ${{ secrets.FREEBSD_USER }}@${{ secrets.FREEBSD_HOST }} "echo 'SSH connection successful'"
+    
+    - name: Install connection plugin
+      run: |
+        mkdir -p ~/.ansible/plugins/connection
+        cp jailexec.py ~/.ansible/plugins/connection/
+    
+    - name: Run smoke test playbook
+      run: |
+        ansible-playbook -i test-inventory.ini tests/integration/smoke-test.yml -v
+      env:
+        ANSIBLE_HOST_KEY_CHECKING: false
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: integration-test-results
+        path: |
+          test-inventory.ini
+          ansible.log
+        retention-days: 7

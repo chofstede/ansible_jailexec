@@ -1,0 +1,14 @@
+[jails]
+# Example inventory for FreeBSD jail testing
+# Replace with your actual FreeBSD server details
+testjail ansible_host=2a13:e3c1:400e:1337::672 ansible_user=ansible ansible_connection=jailexec ansible_python_interpreter=/usr/local/bin/python3
+
+[jails:vars]
+# SSH connection settings
+ansible_ssh_private_key_file=~/.ssh/id_rsa
+ansible_ssh_common_args='-o StrictHostKeyChecking=yes'
+# Privilege escalation settings for jexec
+ansible_become_method=doas
+ansible_become=yes
+# Optional: specify the jail host if different from ansible_host
+# jail_host=2a13:e3c1:400e:1337::672
