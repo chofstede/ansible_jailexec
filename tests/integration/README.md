@@ -64,6 +64,17 @@ The smoke tests verify:
 - Regularly rotate credentials
 - Use IPv6 firewall rules to restrict access to the test server
 
+## IPv6 Connectivity
+
+**Important**: GitHub-hosted runners do not support IPv6 connectivity. If your FreeBSD host only has an IPv6 address, you have these options:
+
+1. **Use a self-hosted runner** with IPv6 support
+2. **Configure IPv4 access** to your FreeBSD host (dual-stack)
+3. **Set up a jump host** with both IPv4 and IPv6 connectivity
+4. **Run tests locally** instead of in CI
+
+The workflow will gracefully handle the lack of connectivity and provide appropriate warnings.
+
 ## Troubleshooting
 
 If tests fail:
@@ -71,3 +82,4 @@ If tests fail:
 2. Check jail is running: `jls` on the FreeBSD host
 3. Ensure Python is installed in the jail
 4. Review GitHub Actions logs for detailed error messages
+5. For IPv6 hosts, ensure you're using a runner with IPv6 support
