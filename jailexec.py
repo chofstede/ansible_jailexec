@@ -50,6 +50,7 @@ import os
 import re
 import shlex
 import time
+from functools import wraps
 from typing import Callable, Tuple, Union
 
 from ansible.errors import AnsibleConnectionFailure, AnsibleError
@@ -72,6 +73,8 @@ RETRY_DELAY = 1.0
 # Security constants
 MAX_JAIL_NAME_LENGTH = 255
 VALID_JAIL_NAME_REGEX = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+DANGEROUS_PATH_PATTERNS = ("..", "$(", "`", "|", ";", "&", "(")
+HOME_DIR_PATTERN = re.compile(r"(^|\s)~[^/\s]*/")
 
 
 def validate_jail_name(jail_name: str) -> None:
@@ -111,18 +114,7 @@ def validate_path_security(path: str) -> None:
             )
         return
 
-    # Security validation for dangerous patterns
-    dangerous_patterns = [
-        "..",  # Directory traversal
-        "$(",  # Command substitution
-        "`",  # Command substitution
-        "|",  # Pipe operations
-        ";",  # Command separation
-        "&",  # Background processes
-        "(",  # Function calls or subshells
-    ]
-
-    for pattern in dangerous_patterns:
+    for pattern in DANGEROUS_PATH_PATTERNS:
         if pattern in path:
             raise AnsibleError(f"Path contains dangerous pattern '{pattern}': {path}")
 
@@ -135,6 +127,7 @@ def retry_on_failure(
     """Decorator to retry functions on transient failures with exponential backoff."""
 
     def decorator(func):
+        @wraps(func)
         def wrapper(*args, **kwargs):
             last_exception = None
             for attempt in range(max_attempts):
@@ -395,12 +388,14 @@ class Connection(SSHConnection):
         """Load and validate jail configuration from Ansible options."""
         try:
             jail_host = self.get_option("jail_host")
-            if not jail_host or not jail_host.strip():
+            if jail_host:
+                jail_host = jail_host.strip()
+            if not jail_host:
                 raise AnsibleConnectionFailure(
                     f"No jail host specified for jail '{self.jail_name}'. "
                     "Set ansible_jail_host in inventory."
                 )
-            self.jail_host = jail_host.strip()
+            self.jail_host = jail_host
 
             jail_name_option = self.get_option("jail_name")
             if jail_name_option and jail_name_option != self.jail_name:
@@ -414,7 +409,7 @@ class Connection(SSHConnection):
             jail_user = self.get_option("jail_user")
             if jail_user:
                 jail_user = jail_user.strip()
-                if not jail_user or jail_user.isspace():
+                if not jail_user:
                     raise AnsibleConnectionFailure(
                         "jail_user cannot be empty or whitespace"
                     )
@@ -452,7 +447,7 @@ class Connection(SSHConnection):
                     display.warning(f"Invalid timeout value: {timeout}, using default")
 
         except AnsibleConnectionFailure:
-            raise
+            raise  # Re-raise connection failures as-is
         except Exception as e:
             raise AnsibleConnectionFailure(
                 f"Configuration error for jail '{self.jail_name}': {e}"
@@ -573,7 +568,7 @@ class Connection(SSHConnection):
             )
 
         # Test jail accessibility with a simple command
-        test_cmd = f"{self.privilege_escalation} jls -j {shlex.quote(self.jail_name)}"
+        test_cmd = self._build_host_command("jls", "-j", self.jail_name)
 
         try:
             result = self._host_connection.exec_command(test_cmd)
@@ -583,13 +578,13 @@ class Connection(SSHConnection):
             )
 
         if result[0] != 0:
-            error_msg = self._decode_output(result[2]) if result[2] else "Unknown error"
+            error_msg = self._get_error_message(result[2])
 
             # Provide more helpful error messages based on common issues
             if "No such jail" in error_msg or "not found" in error_msg.lower():
                 # List available jails for troubleshooting
                 try:
-                    list_cmd = f"{self.privilege_escalation} jls -h name"
+                    list_cmd = self._build_host_command("jls", "-h", "name")
                     list_result = self._host_connection.exec_command(list_cmd)
                     if list_result[0] == 0:
                         available_jails = self._decode_output(list_result[1]).strip()
@@ -623,6 +618,33 @@ class Connection(SSHConnection):
             return output.decode("utf-8", errors="replace")
         return output
 
+    def _get_error_message(
+        self, stderr: Union[str, bytes, None], default: str = "Unknown error"
+    ) -> str:
+        """
+        Extract error message from stderr with fallback.
+
+        Args:
+            stderr: The stderr output from a command
+            default: Default message if stderr is empty/None
+
+        Returns:
+            str: The error message or default
+        """
+        return self._decode_output(stderr) if stderr else default
+
+    def _build_host_command(self, *args: str) -> str:
+        """
+        Build a command to run on the jail host with privilege escalation.
+
+        Args:
+            *args: Command arguments to quote and join
+
+        Returns:
+            str: The complete command string with privilege escalation
+        """
+        return " ".join([self.privilege_escalation] + [shlex.quote(a) for a in args])
+
     def _validate_command_security(self, command: str) -> None:
         """Validate command strings for dangerous patterns."""
         if not command:
@@ -633,40 +655,31 @@ class Connection(SSHConnection):
         if ".." in command:
             raise AnsibleError(f"Path contains dangerous pattern '..': {command}")
 
-    def _transform_path_only(self, path: str) -> str:
-        """Transform home directory references to jail-appropriate paths."""
+    def _transform_path(self, path: str, validate: bool = True) -> str:
+        """
+        Transform home directory references to jail-appropriate paths.
+
+        Args:
+            path: The path to transform
+            validate: Whether to perform security validation (default: True)
+
+        Returns:
+            str: Transformed path with ~ references replaced
+
+        Raises:
+            AnsibleError: If validate=True and path contains dangerous patterns
+        """
         if not path:
             return path
 
-        return re.sub(
-            r"(^|\s)~[^/\s]*/", r"\1" + self.remote_tmp.rstrip("/") + "/", path
-        )
+        if validate:
+            for pattern in DANGEROUS_PATH_PATTERNS:
+                if pattern in path:
+                    raise AnsibleError(
+                        f"Path contains dangerous pattern '{pattern}': {path}"
+                    )
 
-    def _transform_path(self, path: str) -> str:
-        """Transform home directory references to jail-appropriate paths with security validation."""
-        if not path:
-            return path
-
-        # Security validation for dangerous patterns
-        dangerous_patterns = [
-            "..",  # Directory traversal
-            "$(",  # Command substitution
-            "`",  # Command substitution
-            "|",  # Pipe operations
-            ";",  # Command separation
-            "&",  # Background processes
-            "(",  # Function calls or subshells
-        ]
-
-        for pattern in dangerous_patterns:
-            if pattern in path:
-                raise AnsibleError(
-                    f"Path contains dangerous pattern '{pattern}': {path}"
-                )
-
-        return re.sub(
-            r"(^|\s)~[^/\s]*/", r"\1" + self.remote_tmp.rstrip("/") + "/", path
-        )
+        return HOME_DIR_PATTERN.sub(r"\1" + self.remote_tmp.rstrip("/") + "/", path)
 
     def _get_jail_root(self) -> str:
         """Get the jail root directory path with caching."""
@@ -677,13 +690,11 @@ class Connection(SSHConnection):
             f"jailexec: Determining jail root for {self.jail_name}", host=self.jail_name
         )
 
-        jail_root_cmd = (
-            f"{self.privilege_escalation} jls -j {shlex.quote(self.jail_name)} path"
-        )
+        jail_root_cmd = self._build_host_command("jls", "-j", self.jail_name, "path")
         result = self._host_connection.exec_command(jail_root_cmd)
 
         if result[0] != 0:
-            error_msg = self._decode_output(result[2]) if result[2] else "Unknown error"
+            error_msg = self._get_error_message(result[2])
             raise AnsibleError(f"Could not determine jail root path: {error_msg}")
 
         stdout = self._decode_output(result[1])
@@ -738,7 +749,7 @@ class Connection(SSHConnection):
         )
 
         # Transform paths in command for jail filesystem (without security validation)
-        cmd_str = self._transform_path_only(cmd_str)
+        cmd_str = self._transform_path(cmd_str, validate=False)
 
         # Build jail execution command
         jail_cmd_parts = [self.privilege_escalation, "jexec"]
@@ -802,8 +813,7 @@ class Connection(SSHConnection):
 
         try:
             # Validate and transform output path for jail filesystem
-            validate_path_security(out_path)  # Only validate the actual file path
-            out_path = self._transform_path(out_path)
+            out_path = self._transform_path(out_path)  # Validates and transforms path
 
             # Get jail root directory
             jail_root = self._get_jail_root()
@@ -811,14 +821,10 @@ class Connection(SSHConnection):
 
             # Ensure target directory exists
             target_dir = os.path.dirname(full_out_path)
-            mkdir_cmd = (
-                f"{self.privilege_escalation} mkdir -p {shlex.quote(target_dir)}"
-            )
+            mkdir_cmd = self._build_host_command("mkdir", "-p", target_dir)
             result = self._host_connection.exec_command(mkdir_cmd)
             if result[0] != 0:
-                error_msg = (
-                    self._decode_output(result[2]) if result[2] else "Unknown error"
-                )
+                error_msg = self._get_error_message(result[2])
                 raise AnsibleError(f"Failed to create target directory: {error_msg}")
 
             # Create unique temporary file with secure permissions
@@ -843,12 +849,10 @@ class Connection(SSHConnection):
                     )
 
                 # Stage 2: Move to jail directory with proper permissions
-                move_cmd = f"{self.privilege_escalation} mv {shlex.quote(temp_file)} {shlex.quote(full_out_path)}"
+                move_cmd = self._build_host_command("mv", temp_file, full_out_path)
                 result = self._host_connection.exec_command(move_cmd)
                 if result[0] != 0:
-                    error_msg = (
-                        self._decode_output(result[2]) if result[2] else "Unknown error"
-                    )
+                    error_msg = self._get_error_message(result[2])
                     raise AnsibleError(
                         f"Failed to move file to jail directory: {error_msg}"
                     )
@@ -862,7 +866,7 @@ class Connection(SSHConnection):
                 # Clean up temporary file on failure - try both with and without privilege escalation
                 cleanup_cmds = [
                     f"rm -f {shlex.quote(temp_file)}",
-                    f"{self.privilege_escalation} rm -f {shlex.quote(temp_file)}",
+                    self._build_host_command("rm", "-f", temp_file),
                 ]
                 for cleanup_cmd in cleanup_cmds:
                     try:
@@ -900,8 +904,7 @@ class Connection(SSHConnection):
 
         try:
             # Validate and transform input path for jail filesystem
-            validate_path_security(in_path)  # Only validate the actual file path
-            in_path = self._transform_path(in_path)
+            in_path = self._transform_path(in_path)  # Validates and transforms path
 
             # Get jail root directory
             jail_root = self._get_jail_root()
@@ -946,8 +949,10 @@ class Connection(SSHConnection):
 
     def __del__(self):
         """Destructor to ensure proper cleanup."""
-        try:
-            self.close()
-        except Exception:
-            # Ignore exceptions during cleanup
-            pass
+        # Guard against double-close or cleanup after partial initialization
+        if getattr(self, "_host_connection", None) is not None:
+            try:
+                self.close()
+            except Exception:
+                # Ignore exceptions during cleanup
+                pass

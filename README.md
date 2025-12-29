@@ -9,13 +9,13 @@ A robust Ansible connection plugin that enables task execution inside FreeBSD ja
 
 ## Features
 
-- 🔒 **Secure**: Input validation, path sanitization, and shell injection protection
-- 🚀 **Performant**: Connection pooling and jail root path caching
-- 🛡️ **Robust**: Comprehensive error handling with retry logic and detailed error messages
-- 🔧 **Flexible**: Support for both `doas` and `sudo` privilege escalation
-- 📁 **File Transfer**: Two-stage file transfers with proper permission handling
-- 🧪 **Well-Tested**: Comprehensive unit test suite with 85%+ code coverage
-- 📖 **Well-Documented**: Extensive documentation and examples
+- **Secure**: Input validation, path sanitization, and shell injection protection
+- **Performant**: Connection pooling and jail root path caching
+- **Robust**: Comprehensive error handling with retry logic and detailed error messages
+- **Flexible**: Support for both `doas` and `sudo` privilege escalation
+- **File Transfer**: Two-stage file transfers with proper permission handling
+- **Well-Tested**: Comprehensive unit test suite with 85%+ code coverage
+- **Well-Documented**: Extensive documentation and examples
 
 ## Demo
 
@@ -372,8 +372,8 @@ This project is licensed under the BSD 2-Clause License - see the [LICENSE](LICE
 
 ## Support
 
-- 🐛 **Issues**: [GitHub Issues](https://github.com/chofstede/ansible_jailexec/issues)
-- 📧 **Email**: christian@hofstede.it
+- **Issues**: [GitHub Issues](https://github.com/chofstede/ansible_jailexec/issues)
+- **Email**: christian@hofstede.it
 
 ---
 
