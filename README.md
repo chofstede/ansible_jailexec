@@ -116,6 +116,7 @@ ansible -i hosts.ini freebsd_jails -m community.general.pkgng -a "name=nginx sta
 |----------|---------|-------------|
 | `ansible_jail_name` | `inventory_hostname` | Override jail name |
 | `ansible_jail_user` | `root` | User for command execution in jail |
+| `ansible_jail_root` | automatic detection | Path of the jail |
 | `ansible_jail_privilege_escalation` | `doas` | Privilege escalation method (`doas` or `sudo`) |
 | `ansible_jail_remote_tmp` | `/tmp/.ansible/tmp` | Remote temporary directory |
 | `ansible_timeout` | `30` | Connection timeout in seconds |
@@ -141,26 +142,26 @@ All standard Ansible SSH options are supported:
   hosts: freebsd_jails
   connection: jailexec
   become: true
-  
+
   tasks:
     - name: Install nginx
       community.general.pkgng:
         name: nginx
         state: present
-    
+
     - name: Copy configuration
       ansible.builtin.copy:
         src: nginx.conf
         dest: /usr/local/etc/nginx/nginx.conf
         backup: true
       notify: restart nginx
-    
+
     - name: Start and enable nginx
       ansible.builtin.service:
         name: nginx
         state: started
         enabled: true
-  
+
   handlers:
     - name: restart nginx
       ansible.builtin.service:
