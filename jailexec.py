@@ -25,26 +25,200 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-"""
-FreeBSD Jail Connection Plugin for Ansible
-
-This connection plugin enables Ansible to execute tasks inside FreeBSD jails
-by connecting to the jail host via SSH and using jexec to run commands within
-the jail. It provides a secure, efficient way to manage jail containers without
-requiring direct SSH access to individual jails.
-
-Features:
-- SSH connection to jail host with full authentication support
-- Jail command execution via jexec with privilege escalation (doas/sudo)
-- Efficient file transfer with proper permission handling
-- Connection pooling and persistence for improved performance
-- Comprehensive error handling and logging
-- Production-ready code quality with extensive documentation
-"""
+# FreeBSD Jail Connection Plugin for Ansible
+#
+# This connection plugin enables Ansible to execute tasks inside FreeBSD jails
+# by connecting to the jail host via SSH and using jexec to run commands within
+# the jail. It provides a secure, efficient way to manage jail containers without
+# requiring direct SSH access to individual jails.
+#
+# Features:
+# - SSH connection to jail host with full authentication support
+# - Jail command execution via jexec with privilege escalation (doas/sudo)
+# - Efficient file transfer with proper permission handling
+# - Connection pooling and persistence for improved performance
+# - Comprehensive error handling and logging
+# - Production-ready code quality with extensive documentation
 
 from __future__ import absolute_import, division, print_function
 
-__metaclass__ = type
+DOCUMENTATION = """
+---
+name: jailexec
+short_description: Execute tasks in FreeBSD jails via jexec over SSH
+description:
+    - This connection plugin allows Ansible to execute tasks inside FreeBSD jails
+    - Uses SSH to connect to the jail host, then jexec to run commands within the jail
+    - Supports file transfers, privilege escalation, and connection persistence
+    - Designed for production use with comprehensive error handling
+author: Christian Hofstede-Kuhn <christian@hofstede.it>
+version_added: "2.0"
+options:
+    # SSH connection options (inherited from SSH plugin)
+    host:
+        description: Hostname/IP of the jail host to connect to
+        default: inventory_hostname
+        vars:
+            - name: inventory_hostname
+            - name: ansible_host
+            - name: ansible_ssh_host
+    ssh_executable:
+        description: Location of SSH executable
+        default: 'ssh'
+        vars:
+            - name: ansible_ssh_executable
+    sftp_executable:
+        description: Location of SFTP executable
+        default: 'sftp'
+        vars:
+            - name: ansible_sftp_executable
+    scp_executable:
+        description: Location of SCP executable
+        default: 'scp'
+        vars:
+            - name: ansible_scp_executable
+    ssh_args:
+        description: Arguments to pass to SSH CLI tools
+        default: ''
+        vars:
+            - name: ansible_ssh_args
+    ssh_common_args:
+        description: Extra arguments for SSH CLI tools
+        default: ''
+        vars:
+            - name: ansible_ssh_common_args
+    ssh_extra_args:
+        description: SSH-specific extra arguments
+        default: ''
+        vars:
+            - name: ansible_ssh_extra_args
+    port:
+        description: Remote port for SSH connection
+        type: int
+        default: 22
+        vars:
+            - name: ansible_port
+            - name: ansible_ssh_port
+    remote_user:
+        description: User for SSH login to jail host
+        vars:
+            - name: ansible_user
+            - name: ansible_ssh_user
+    timeout:
+        description: Connection timeout in seconds
+        type: int
+        default: 10
+        vars:
+            - name: ansible_timeout
+            - name: ansible_ssh_timeout
+    private_key_file:
+        description: Path to SSH private key
+        vars:
+            - name: ansible_private_key_file
+            - name: ansible_ssh_private_key_file
+    password:
+        description: SSH password
+        vars:
+            - name: ansible_password
+            - name: ansible_ssh_password
+    host_key_checking:
+        description: Whether to check SSH host keys
+        type: bool
+        default: true
+        vars:
+            - name: ansible_host_key_checking
+            - name: ansible_ssh_host_key_checking
+    use_tty:
+        description: Force TTY allocation
+        type: bool
+        default: true
+        vars:
+            - name: ansible_ssh_use_tty
+    reconnection_retries:
+        description: Number of connection retry attempts
+        type: int
+        default: 3
+        vars:
+            - name: ansible_ssh_reconnection_retries
+     # Jail-specific options
+    jail_name:
+        description: Name of the jail to connect to
+        vars:
+            - name: ansible_jail_name
+    jail_host:
+        description: FreeBSD host that runs the jails
+        required: true
+        vars:
+            - name: ansible_jail_host
+    jail_user:
+        description: User to execute commands as within the jail
+        default: root
+        vars:
+            - name: ansible_user
+            - name: ansible_jail_user
+    privilege_escalation:
+        description: Privilege escalation method (doas or sudo)
+        default: doas
+        choices: ['doas', 'sudo']
+        vars:
+            - name: ansible_jail_privilege_escalation
+            - name: ansible_privilege_escalation
+    remote_tmp:
+        description: Remote temporary directory for Ansible files
+        default: /tmp/.ansible/tmp
+        vars:
+            - name: ansible_remote_tmp
+            - name: ansible_jail_remote_tmp
+
+notes:
+    - Requires SSH access to the jail host with privilege escalation (doas/sudo)
+    - The jail must exist and be running on the target host
+    - File transfers use a two-stage process for proper permission handling
+    - Connection pooling improves performance for multiple operations
+    - All paths starting with ~ are converted to use the remote_tmp directory
+
+seealso:
+    - name: FreeBSD Jails Handbook
+      description: Official FreeBSD documentation on jails
+      link: https://docs.freebsd.org/en/books/handbook/jails/
+    - name: Ansible SSH Connection Plugin
+      description: Base SSH plugin documentation
+      link: https://docs.ansible.com/ansible/latest/plugins/connection/ssh.html
+"""
+
+EXAMPLES = """
+- name: Inventory configuration for jail management
+  description: |
+    Configure inventory to manage FreeBSD jails via SSH to jail host
+  code: |
+    # inventory/hosts
+    [jail_hosts]
+    freebsd-host.example.com ansible_connection=ssh ansible_user=admin
+     [jails]
+    web-jail ansible_connection=jailexec ansible_jail_host=freebsd-host.example.com
+    db-jail  ansible_connection=jailexec ansible_jail_host=freebsd-host.example.com
+
+- name: Playbook using jail connection
+  description: |
+    Execute tasks inside jails using the jailexec connection plugin
+  code: |
+    - hosts: jails
+      connection: jailexec
+      tasks:
+        - name: Install package in jail
+          package:
+            name: nginx
+            state: present
+        - name: Copy configuration file to jail
+          copy:
+            src: nginx.conf
+            dest: /usr/local/etc/nginx/nginx.conf
+        - name: Start service in jail
+          service:
+            name: nginx
+            state: started
+            enabled: yes
+"""
 
 import os
 import re
@@ -60,6 +234,7 @@ from ansible.utils.display import Display
 
 # Module-level display instance for consistent logging
 display = Display()
+display.vvvv(">>>> Connection plugin jailexec debug message.")
 
 # Constants for configuration
 DEFAULT_JAIL_USER = "root"
@@ -87,12 +262,13 @@ def validate_jail_name(jail_name: str) -> None:
     Raises:
         AnsibleConnectionFailure: If jail name is invalid
     """
-    if not jail_name or not jail_name.strip():
+    display.vvvv(f">>>> validate_jail_name jail_name: {jail_name}", jail_name)
+    if not jail_name or not str(jail_name).strip():
         raise AnsibleConnectionFailure("Jail name cannot be empty")
 
-    jail_name = jail_name.strip()
+    jail_name = str(jail_name).strip()
 
-    if len(jail_name) > MAX_JAIL_NAME_LENGTH:
+    if len(str(jail_name)) > MAX_JAIL_NAME_LENGTH:
         raise AnsibleConnectionFailure(
             f"Jail name too long (max {MAX_JAIL_NAME_LENGTH} characters): {jail_name}"
         )
@@ -108,7 +284,7 @@ def validate_jail_name(jail_name: str) -> None:
 def validate_path_security(path: str) -> None:
     """Validate file paths to prevent security attacks."""
     if not path or not path.strip():
-        if path and path.strip() != path:  # Whitespace-only paths
+        if path.isspace():
             raise AnsibleError(
                 f"Path contains dangerous pattern (whitespace-only): {repr(path)}"
             )
@@ -136,196 +312,15 @@ def retry_on_failure(
                 except exceptions as e:
                     last_exception = e
                     if attempt < max_attempts - 1:
-                        display.vvv(f"Retry attempt {attempt + 1} failed: {e}")
+                        display.vvv(f">>> Retry attempt {attempt + 1} failed: {e}")
                         time.sleep(delay * (attempt + 1))
                     else:
-                        display.vvv(f"All {max_attempts} attempts failed")
+                        display.vvv(f">>> All {max_attempts} attempts failed")
             raise last_exception
 
         return wrapper
 
     return decorator
-
-
-DOCUMENTATION = """
-    name: jailexec
-    short_description: Execute tasks in FreeBSD jails via jexec over SSH
-    description:
-        - This connection plugin allows Ansible to execute tasks inside FreeBSD jails
-        - Uses SSH to connect to the jail host, then jexec to run commands within the jail
-        - Supports file transfers, privilege escalation, and connection persistence
-        - Designed for production use with comprehensive error handling
-    author: Christian Hofstede-Kuhn <christian@hofstede.it>
-    version_added: "2.0"
-    options:
-        # SSH connection options (inherited from SSH plugin)
-        host:
-            description: Hostname/IP of the jail host to connect to
-            default: inventory_hostname
-            vars:
-                - name: inventory_hostname
-                - name: ansible_host
-                - name: ansible_ssh_host
-        ssh_executable:
-            description: Location of SSH executable
-            default: 'ssh'
-            vars:
-                - name: ansible_ssh_executable
-        sftp_executable:
-            description: Location of SFTP executable
-            default: 'sftp'
-            vars:
-                - name: ansible_sftp_executable
-        scp_executable:
-            description: Location of SCP executable
-            default: 'scp'
-            vars:
-                - name: ansible_scp_executable
-        ssh_args:
-            description: Arguments to pass to SSH CLI tools
-            default: ''
-            vars:
-                - name: ansible_ssh_args
-        ssh_common_args:
-            description: Extra arguments for SSH CLI tools
-            default: ''
-            vars:
-                - name: ansible_ssh_common_args
-        ssh_extra_args:
-            description: SSH-specific extra arguments
-            default: ''
-            vars:
-                - name: ansible_ssh_extra_args
-        port:
-            description: Remote port for SSH connection
-            type: int
-            default: 22
-            vars:
-                - name: ansible_port
-                - name: ansible_ssh_port
-        remote_user:
-            description: User for SSH login to jail host
-            vars:
-                - name: ansible_user
-                - name: ansible_ssh_user
-        timeout:
-            description: Connection timeout in seconds
-            type: int
-            default: 10
-            vars:
-                - name: ansible_timeout
-                - name: ansible_ssh_timeout
-        private_key_file:
-            description: Path to SSH private key
-            vars:
-                - name: ansible_private_key_file
-                - name: ansible_ssh_private_key_file
-        password:
-            description: SSH password
-            vars:
-                - name: ansible_password
-                - name: ansible_ssh_password
-        host_key_checking:
-            description: Whether to check SSH host keys
-            type: bool
-            default: true
-            vars:
-                - name: ansible_host_key_checking
-                - name: ansible_ssh_host_key_checking
-        use_tty:
-            description: Force TTY allocation
-            type: bool
-            default: true
-            vars:
-                - name: ansible_ssh_use_tty
-        reconnection_retries:
-            description: Number of connection retry attempts
-            type: int
-            default: 3
-            vars:
-                - name: ansible_ssh_reconnection_retries
-
-        # Jail-specific options
-        jail_name:
-            description: Name of the jail to connect to
-            vars:
-                - name: ansible_jail_name
-        jail_host:
-            description: FreeBSD host that runs the jails
-            required: true
-            vars:
-                - name: ansible_jail_host
-        jail_user:
-            description: User to execute commands as within the jail
-            default: root
-            vars:
-                - name: ansible_user
-                - name: ansible_jail_user
-        privilege_escalation:
-            description: Privilege escalation method (doas or sudo)
-            default: doas
-            choices: ['doas', 'sudo']
-            vars:
-                - name: ansible_jail_privilege_escalation
-                - name: ansible_privilege_escalation
-        remote_tmp:
-            description: Remote temporary directory for Ansible files
-            default: /tmp/.ansible/tmp
-            vars:
-                - name: ansible_remote_tmp
-                - name: ansible_jail_remote_tmp
-
-    notes:
-        - Requires SSH access to the jail host with privilege escalation (doas/sudo)
-        - The jail must exist and be running on the target host
-        - File transfers use a two-stage process for proper permission handling
-        - Connection pooling improves performance for multiple operations
-        - All paths starting with ~ are converted to use the remote_tmp directory
-
-    seealso:
-        - name: FreeBSD Jails Handbook
-          description: Official FreeBSD documentation on jails
-          link: https://docs.freebsd.org/en/books/handbook/jails/
-        - name: Ansible SSH Connection Plugin
-          description: Base SSH plugin documentation
-          link: https://docs.ansible.com/ansible/latest/plugins/connection/ssh.html
-
-    examples:
-        - name: Inventory configuration for jail management
-          description: |
-            Configure inventory to manage FreeBSD jails via SSH to jail host
-          code: |
-            # inventory/hosts
-            [jail_hosts]
-            freebsd-host.example.com ansible_connection=ssh ansible_user=admin
-
-            [jails]
-            web-jail ansible_connection=jailexec ansible_jail_host=freebsd-host.example.com
-            db-jail  ansible_connection=jailexec ansible_jail_host=freebsd-host.example.com
-
-        - name: Playbook using jail connection
-          description: |
-            Execute tasks inside jails using the jailexec connection plugin
-          code: |
-            - hosts: jails
-              connection: jailexec
-              tasks:
-                - name: Install package in jail
-                  package:
-                    name: nginx
-                    state: present
-
-                - name: Copy configuration file to jail
-                  copy:
-                    src: nginx.conf
-                    dest: /usr/local/etc/nginx/nginx.conf
-
-                - name: Start service in jail
-                  service:
-                    name: nginx
-                    state: started
-                    enabled: yes
-"""
 
 
 class Connection(SSHConnection):
@@ -378,7 +373,7 @@ class Connection(SSHConnection):
         self._last_activity = time.time()
 
         display.vvv(
-            f"jailexec: Initializing connection to jail '{self.jail_name}'",
+            f">>> jailexec: Initializing connection to jail '{self.jail_name}'",
             host=self.jail_name,
         )
 
@@ -386,8 +381,10 @@ class Connection(SSHConnection):
 
     def _get_jail_configuration(self) -> None:
         """Load and validate jail configuration from Ansible options."""
+        display.vvvv(">>>> _get_jail_configuration", host=self.jail_name)
         try:
             jail_host = self.get_option("jail_host")
+            display.vvvv(f">>>> _get_jail_configuration jail_host: {jail_host}", host=self.jail_name)
             if jail_host:
                 jail_host = jail_host.strip()
             if not jail_host:
@@ -398,15 +395,17 @@ class Connection(SSHConnection):
             self.jail_host = jail_host
 
             jail_name_option = self.get_option("jail_name")
+            display.vvvv(f">>>> _get_jail_configuration jail_name_option: {jail_name_option}", host=self.jail_name)
             if jail_name_option and jail_name_option != self.jail_name:
                 validate_jail_name(jail_name_option)
                 display.vvv(
-                    f"jailexec: Overriding jail name to '{jail_name_option}'",
+                    f">>> jailexec: Overriding jail name to '{jail_name_option}'",
                     host=self.jail_name,
                 )
                 self.jail_name = jail_name_option
 
             jail_user = self.get_option("jail_user")
+            display.vvvv(f">>>> _get_jail_configuration jail_user: {jail_user}", host=self.jail_name)
             if jail_user:
                 jail_user = jail_user.strip()
                 if not jail_user:
@@ -416,6 +415,7 @@ class Connection(SSHConnection):
                 self.jail_user = jail_user
 
             privilege_escalation = self.get_option("privilege_escalation")
+            display.vvvv(f">>>> _get_jail_configuration privilege_escalation: {privilege_escalation}", host=self.jail_name)
             if privilege_escalation:
                 privilege_escalation = privilege_escalation.strip().lower()
                 if privilege_escalation not in ["doas", "sudo"]:
@@ -425,6 +425,7 @@ class Connection(SSHConnection):
                 self.privilege_escalation = privilege_escalation
 
             remote_tmp = self.get_option("remote_tmp")
+            display.vvvv(f">>>> _get_jail_configuration remote_tmp: {remote_tmp}", host=self.jail_name)
             if remote_tmp:
                 remote_tmp = remote_tmp.strip()
                 if not remote_tmp:
@@ -440,6 +441,7 @@ class Connection(SSHConnection):
                 self.remote_tmp = remote_tmp
 
             timeout = self.get_option("timeout")
+            display.vvvv(f">>>> _get_jail_configuration timeout: {timeout}", host=self.jail_name)
             if timeout:
                 try:
                     self.connection_timeout = max(1, int(timeout))
@@ -447,8 +449,10 @@ class Connection(SSHConnection):
                     display.warning(f"Invalid timeout value: {timeout}, using default")
 
         except AnsibleConnectionFailure:
+            display.vvvv(">>>> _get_jail_configuration jail_host: Re-raise connection failures as-is", host=self.jail_name)
             raise  # Re-raise connection failures as-is
         except Exception as e:
+            display.vvvv(f">>>> _get_jail_configuration jail_host: Configuration error: {e}", host=self.jail_name)
             raise AnsibleConnectionFailure(
                 f"Configuration error for jail '{self.jail_name}': {e}"
             )
@@ -465,7 +469,7 @@ class Connection(SSHConnection):
             AnsibleConnectionFailure: If SSH connection cannot be established
         """
         display.vvv(
-            f"jailexec: Creating SSH connection to jail host: {self.jail_host}",
+            f">>> jailexec: Creating SSH connection to jail host: {self.jail_host}",
             host=self.jail_name,
         )
 
@@ -510,7 +514,7 @@ class Connection(SSHConnection):
             host_conn._connect()
 
             display.vvv(
-                f"jailexec: SSH connection established to {self.jail_host}",
+                f">>> jailexec: SSH connection established to {self.jail_host}",
                 host=self.jail_name,
             )
             return host_conn
@@ -529,21 +533,26 @@ class Connection(SSHConnection):
         Raises:
             AnsibleConnectionFailure: If connection cannot be established
         """
+        display.vvvv(">>>> _connect", host=self.jail_name)
         if self._connected:
+            display.vvvv(">>>> _connect: connected", host=self.jail_name)
             return self
 
         # Load jail configuration
+        display.vvvv(">>>> _connect: _get_jail_configuration", host=self.jail_name)
         self._get_jail_configuration()
 
         # Create SSH connection to jail host (with caching)
         if not self._host_connection:
+            display.vvvv(">>>> _connect: _create_ssh_connection", host=self.jail_name)
             self._host_connection = self._create_ssh_connection()
 
         # Verify jail exists and is accessible
+        display.vvvv(">>>> _connect: _verify_jail_access", host=self.jail_name)
         self._verify_jail_access()
 
         display.vvv(
-            f"jailexec: Connected to jail '{self.jail_name}' via host '{self.jail_host}'",
+            f">>> jailexec: Connected to jail '{self.jail_name}' via host '{self.jail_host}'",
             host=self.jail_name,
         )
 
@@ -559,26 +568,32 @@ class Connection(SSHConnection):
             AnsibleConnectionFailure: If jail is not accessible
         """
         display.vvv(
-            f"jailexec: Verifying jail access: {self.jail_name}", host=self.jail_name
+            f">>> jailexec: Verifying jail access: {self.jail_name}", host=self.jail_name
         )
+        display.vvvv(">>>> _verify_jail_access", host=self.jail_name)
 
         if not self._host_connection:
+            display.vvvv(">>>> _verify_jail_access: No SSH connection available for jail verification", host=self.jail_name)
             raise AnsibleConnectionFailure(
                 "No SSH connection available for jail verification"
             )
 
         # Test jail accessibility with a simple command
         test_cmd = self._build_host_command("jls", "-j", self.jail_name)
+        display.vvvv(f">>>> _verify_jail_access: Test jail accessibility with a simple command: {test_cmd}", host=self.jail_name)
 
         try:
             result = self._host_connection.exec_command(test_cmd)
+            display.vvvv(f">>>> _verify_jail_access: command: {test_cmd} result: {result[0]}", host=self.jail_name)
         except Exception as e:
+            display.vvvv(f">>>> _verify_jail_access: Failed to execute jail verification command: {e}", host=self.jail_name)
             raise AnsibleConnectionFailure(
                 f"Failed to execute jail verification command: {e}"
             )
 
         if result[0] != 0:
             error_msg = self._get_error_message(result[2])
+            display.vvvv(f">>>> _verify_jail_access: error message: {error_msg}", host=self.jail_name)
 
             # Provide more helpful error messages based on common issues
             if "No such jail" in error_msg or "not found" in error_msg.lower():
@@ -592,9 +607,12 @@ class Connection(SSHConnection):
                             f"Jail '{self.jail_name}' not found. Available jails:\n{available_jails}"
                         )
                 except Exception:
+                    display.vvvv(">>>> If we can't list jails, just use the original error", host=self.jail_name)
                     pass  # If we can't list jails, just use the original error
 
             elif "Permission denied" in error_msg:
+                display.vvvv(f">>>> Permission denied accessing jail. \
+                                    Ensure {self.privilege_escalation} is configured for jail management commands.", host=self.jail_name)
                 raise AnsibleConnectionFailure(
                     f"Permission denied accessing jail '{self.jail_name}'. "
                     f"Ensure {self.privilege_escalation} is configured for jail management commands."
@@ -603,6 +621,8 @@ class Connection(SSHConnection):
             raise AnsibleConnectionFailure(
                 f"Cannot access jail '{self.jail_name}': {error_msg}"
             )
+
+        display.vvvv(">>>> _verify_jail_access: passed", host=self.jail_name)
 
     def _decode_output(self, output: Union[str, bytes]) -> str:
         """
@@ -687,7 +707,7 @@ class Connection(SSHConnection):
             return self._jail_root_cache
 
         display.vvv(
-            f"jailexec: Determining jail root for {self.jail_name}", host=self.jail_name
+            f">>> jailexec: Determining jail root for {self.jail_name}", host=self.jail_name
         )
 
         jail_root_cmd = self._build_host_command("jls", "-j", self.jail_name, "path")
@@ -704,7 +724,7 @@ class Connection(SSHConnection):
             raise AnsibleError("Empty jail root path returned from jls command")
 
         self._jail_root_cache = jail_root
-        display.vvv(f"jailexec: Jail root cached: {jail_root}", host=self.jail_name)
+        display.vvv(f">>> jailexec: Jail root cached: {jail_root}", host=self.jail_name)
         return jail_root
 
     def exec_command(
@@ -724,6 +744,7 @@ class Connection(SSHConnection):
         Raises:
             AnsibleError: If command execution fails
         """
+        display.vvvv(">>>> exec_command", host=self.jail_name)
         if not self._connected:
             self._connect()
 
@@ -731,20 +752,24 @@ class Connection(SSHConnection):
         self._last_activity = time.time()
 
         # Validate and build command string
+        display.vvvv(f">>>> exec_command: cmd: {cmd}", host=self.jail_name)
         if isinstance(cmd, list):
+            display.vvvv(">>>> exec_command: cmd is a list", host=self.jail_name)
             if not cmd:
                 raise AnsibleError("Command list cannot be empty")
             cmd_str = " ".join(shlex.quote(str(arg)) for arg in cmd if arg is not None)
         else:
+            display.vvvv(">>>> exec_command: cmd is not a list", host=self.jail_name)
             cmd_str = str(cmd).strip()
             # Only validate string commands for dangerous patterns (list commands are safely quoted)
             self._validate_command_security(cmd_str)
 
+        display.vvvv(f">>>> exec_command: cmd_str: {cmd_str}", host=self.jail_name)
         if not cmd_str:
             raise AnsibleError("Command cannot be empty")
 
         display.vvv(
-            f"jailexec: Executing in jail '{self.jail_name}': {cmd_str}",
+            f">>> jailexec: Executing in jail '{self.jail_name}': {cmd_str}",
             host=self.jail_name,
         )
 
@@ -753,19 +778,22 @@ class Connection(SSHConnection):
 
         # Build jail execution command
         jail_cmd_parts = [self.privilege_escalation, "jexec"]
+        display.vvvv(f">>>> exec_command: jail_cmd_parts: {jail_cmd_parts}", host=self.jail_name)
 
         # Add user specification if not root
         if self.jail_user and self.jail_user != "root":
             jail_cmd_parts.extend(["-u", self.jail_user])
+            display.vvvv(f">>>> exec_command: jail_cmd_parts: {jail_cmd_parts}", host=self.jail_name)
 
         # Add jail name and command
         jail_cmd_parts.extend([self.jail_name, "/bin/sh", "-c", cmd_str])
+        display.vvvv(f">>>> exec_command: jail_cmd_parts: {jail_cmd_parts}", host=self.jail_name)
 
         # Build final command
         final_cmd = " ".join(shlex.quote(part) for part in jail_cmd_parts)
 
         display.vvv(
-            f"jailexec: Executing on jail host: {final_cmd}", host=self.jail_name
+            f">>> jailexec: Executing on jail host: {final_cmd}", host=self.jail_name
         )
 
         # Execute via SSH connection to jail host with error handling
@@ -777,7 +805,7 @@ class Connection(SSHConnection):
 
             # Log command completion for debugging
             display.vvv(
-                f"jailexec: Command completed with return code {result[0]}",
+                f">>> jailexec: Command completed with return code {result[0]}",
                 host=self.jail_name,
             )
 
@@ -807,7 +835,7 @@ class Connection(SSHConnection):
             self._connect()
 
         display.vvv(
-            f"jailexec: Copying file from {in_path} to jail:{out_path}",
+            f">>> jailexec: Copying file from {in_path} to jail:{out_path}",
             host=self.jail_name,
         )
 
@@ -832,7 +860,7 @@ class Connection(SSHConnection):
             temp_file = f"/tmp/{temp_name}"
 
             display.vvv(
-                f"jailexec: Transferring via temporary file {temp_file}",
+                f">>> jailexec: Transferring via temporary file {temp_file}",
                 host=self.jail_name,
             )
 
@@ -858,7 +886,7 @@ class Connection(SSHConnection):
                     )
 
                 display.vvv(
-                    f"jailexec: File successfully copied to {full_out_path}",
+                    f">>> jailexec: File successfully copied to {full_out_path}",
                     host=self.jail_name,
                 )
 
@@ -898,7 +926,7 @@ class Connection(SSHConnection):
             self._connect()
 
         display.vvv(
-            f"jailexec: Fetching file from jail:{in_path} to {out_path}",
+            f">>> jailexec: Fetching file from jail:{in_path} to {out_path}",
             host=self.jail_name,
         )
 
@@ -920,7 +948,7 @@ class Connection(SSHConnection):
             self._host_connection.fetch_file(full_in_path, out_path)
 
             display.vvv(
-                f"jailexec: File successfully fetched from {full_in_path}",
+                f">>> jailexec: File successfully fetched from {full_in_path}",
                 host=self.jail_name,
             )
 
@@ -932,7 +960,7 @@ class Connection(SSHConnection):
         Close the connection and clean up resources.
         """
         display.vvv(
-            f"jailexec: Closing connection to jail '{self.jail_name}'",
+            f">>> jailexec: Closing connection to jail '{self.jail_name}'",
             host=self.jail_name,
         )
 
