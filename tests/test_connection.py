@@ -115,10 +115,22 @@ class TestProperties:
         conn = make_conn({"privilege_escalation": "sudo"})
         assert conn.privesc == "sudo"
 
-    def test_privesc_invalid_rejected_by_ansible(self, make_conn):
-        """Ansible enforces ``choices`` at set_option time."""
+    def test_privesc_invalid_is_rejected(self, make_conn):
+        """Bad ``privilege_escalation`` values must never reach a shell.
+
+        ansible-core >= 2.20 raises AnsibleOptionsError inside ``set_option``
+        for values outside ``choices``; older versions defer the check, so the
+        plugin validates again when reading ``self.privesc``. Either layer is
+        fine -- as long as one of them refuses to hand back ``"su"``.
+        """
         from ansible.errors import AnsibleOptionsError
 
         conn = make_conn()
-        with pytest.raises(AnsibleOptionsError, match="Invalid value 'su'"):
+        try:
             conn.set_option("privilege_escalation", "su")
+        except AnsibleOptionsError:
+            return  # ansible-core >= 2.20 path
+        with pytest.raises(
+            AnsibleConnectionFailure, match="Invalid privilege_escalation"
+        ):
+            _ = conn.privesc

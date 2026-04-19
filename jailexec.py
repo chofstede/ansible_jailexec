@@ -90,6 +90,7 @@ globals().update(DOCUMENTATION=_extend_with_ssh_options(DOCUMENTATION))
 
 MAX_JAIL_NAME_LENGTH = 255
 JAIL_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
+PRIVESC_CHOICES = ("doas", "sudo")
 # /tmp is on the remote jail host, not the Ansible controller. File names are
 # randomized via ``os.urandom`` in ``put_file``, which defeats predictable-name
 # attacks. Bandit's B108 check is about local-tmp usage and does not apply.
@@ -159,9 +160,15 @@ class Connection(SSHConnection):
 
     @property
     def privesc(self):
-        # ``choices: [doas, sudo]`` in DOCUMENTATION makes Ansible reject
-        # other values at set-time, so no runtime validation needed here.
-        return self.get_option("privilege_escalation")
+        # ansible-core >= 2.20 rejects off-``choices`` values at ``set_option``
+        # time; older releases defer the check, so validate here too.
+        value = self.get_option("privilege_escalation")
+        if value not in PRIVESC_CHOICES:
+            raise AnsibleConnectionFailure(
+                f"Invalid privilege_escalation {value!r}: "
+                f"must be one of {', '.join(PRIVESC_CHOICES)}"
+            )
+        return value
 
     # ---- connect / lifecycle --------------------------------------------
 

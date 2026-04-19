@@ -1,0 +1,10 @@
+# Tool configuration only. Packaging metadata lives in setup.py.
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["jailexec"]
