@@ -1,275 +1,124 @@
-"""
-Unit tests for the Connection class core functionality.
+"""Tests for connection lifecycle, properties, and jail-root resolution."""
 
-Tests connection initialization, configuration loading, SSH connection
-management, and basic connection lifecycle.
-"""
+from __future__ import annotations
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
-from ansible.errors import AnsibleConnectionFailure, AnsibleError
-
-# Import test utilities
-import sys
-import os
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+from ansible.errors import AnsibleConnectionFailure
 
 
-class TestConnectionInitialization:
-    """Test Connection class initialization."""
-    
-    def test_connection_init_valid_jail_name(self, mock_play_context, mock_display):
-        """Test successful connection initialization with valid jail name."""
-        from jailexec import Connection
-        
-        mock_play_context.remote_addr = "testjail"
-        
-        with patch('jailexec.SSHConnection') as mock_ssh_base:
-            conn = Connection(mock_play_context, None)
-            
-            assert conn.jail_name == "testjail"
-            assert conn.jail_user == "root"  # Default
-            assert conn.privilege_escalation == "doas"  # Default
-            assert conn.remote_tmp == "/tmp/.ansible/tmp"  # Default
-    
-    def test_connection_init_invalid_jail_name(self, mock_play_context, mock_display):
-        """Test connection initialization with invalid jail name."""
-        from jailexec import Connection
-        
-        mock_play_context.remote_addr = "invalid;jail"
-        
-        with patch('jailexec.SSHConnection') as mock_ssh_base:
-            with pytest.raises(AnsibleConnectionFailure, match="Invalid jail name format"):
-                Connection(mock_play_context, None)
-    
-    def test_connection_init_custom_user(self, mock_play_context, mock_display):
-        """Test connection initialization with custom user."""
-        from jailexec import Connection
-        
-        mock_play_context.remote_addr = "testjail"
-        mock_play_context.remote_user = "testuser"
-        
-        with patch('jailexec.SSHConnection') as mock_ssh_base:
-            conn = Connection(mock_play_context, None)
-            assert conn.jail_user == "testuser"
-    
-    def test_connection_attributes_initialized(self, mock_play_context, mock_display):
-        """Test that all connection attributes are properly initialized."""
-        from jailexec import Connection
-        
-        with patch('jailexec.SSHConnection') as mock_ssh_base:
-            conn = Connection(mock_play_context, None)
-            
-            # Check all attributes are initialized
-            assert hasattr(conn, 'jail_name')
-            assert hasattr(conn, 'jail_host')
-            assert hasattr(conn, 'jail_user')
-            assert hasattr(conn, 'privilege_escalation')
-            assert hasattr(conn, 'remote_tmp')
-            assert hasattr(conn, 'connection_timeout')
-            assert hasattr(conn, '_jail_root_cache')
-            assert hasattr(conn, '_host_connection')
-            assert hasattr(conn, '_last_activity')
-            
-            # Check initial values
-            assert conn._jail_root_cache is None
-            assert conn._host_connection is None
-            assert isinstance(conn._last_activity, float)
+class TestConnect:
+    def test_redirects_ssh_to_jail_host(self, make_conn):
+        conn = make_conn({"jail_host": "jail.example"})
+        conn._connect()
+        assert conn.get_option("host") == "jail.example"
+        conn.ssh_connect_mock.assert_called_once()
+
+    def test_missing_jail_host_errors(self, make_conn):
+        conn = make_conn()
+        conn.set_option("jail_host", "  ")
+        with pytest.raises(AnsibleConnectionFailure, match="ansible_jail_host"):
+            conn._connect()
+
+    def test_connect_is_idempotent(self, make_conn):
+        conn = make_conn()
+        conn._connect()
+        conn._connect()
+        conn.ssh_connect_mock.assert_called_once()
+
+    def test_connect_does_not_probe_eagerly(self, make_conn):
+        """Regression: connect must not issue an SSH round trip.
+
+        The jail-root probe is deferred until the first file operation so that
+        exec-only workloads don't pay for the lookup and so that probing can't
+        recurse through ``@ensure_connect``.
+        """
+        conn = make_conn()
+        conn._connect()
+        assert conn._connected is True
+        assert conn._jail_root is None
+        conn.ssh_exec.assert_not_called()
+
+    def test_close_resets_cache(self, make_conn):
+        conn = make_conn()
+        conn._connect()
+        conn._jail_root = "/jail/testjail"
+        conn.close()
+        assert conn._jail_root is None
+        conn.ssh_close_mock.assert_called_once()
 
 
-class TestConfigurationLoading:
-    """Test configuration loading and validation."""
-    
-    def test_get_jail_configuration_success(self, jail_connection, sample_config, test_helper):
-        """Test successful configuration loading."""
-        test_helper.mock_get_option(jail_connection, sample_config)
-        
-        jail_connection._get_jail_configuration()
-        
-        assert jail_connection.jail_host == sample_config['jail_host']
-        assert jail_connection.jail_user == sample_config['jail_user']
-        assert jail_connection.privilege_escalation == sample_config['privilege_escalation']
-        assert jail_connection.remote_tmp == sample_config['remote_tmp']
-    
-    def test_get_jail_configuration_missing_host(self, jail_connection, test_helper):
-        """Test configuration loading with missing jail_host."""
-        test_helper.mock_get_option(jail_connection, {})
-        
-        with pytest.raises(AnsibleConnectionFailure, match="No jail host specified"):
-            jail_connection._get_jail_configuration()
-    
-    def test_get_jail_configuration_empty_host(self, jail_connection, test_helper):
-        """Test configuration loading with empty jail_host."""
-        test_helper.mock_get_option(jail_connection, {'jail_host': '   '})
-        
-        with pytest.raises(AnsibleConnectionFailure, match="No jail host specified"):
-            jail_connection._get_jail_configuration()
-    
-    def test_get_jail_configuration_invalid_privilege_escalation(self, jail_connection, test_helper):
-        """Test configuration loading with invalid privilege escalation method."""
-        config = {
-            'jail_host': 'host.example.com',
-            'privilege_escalation': 'invalid_method'
-        }
-        test_helper.mock_get_option(jail_connection, config)
-        
-        with pytest.raises(AnsibleConnectionFailure, match="Invalid privilege escalation method"):
-            jail_connection._get_jail_configuration()
-    
-    def test_get_jail_configuration_invalid_remote_tmp(self, jail_connection, test_helper):
-        """Test configuration loading with invalid remote_tmp path."""
-        config = {
-            'jail_host': 'host.example.com',
-            'remote_tmp': 'relative/path'  # Not absolute
-        }
-        test_helper.mock_get_option(jail_connection, config)
-        
-        with pytest.raises(AnsibleConnectionFailure, match="must be an absolute path"):
-            jail_connection._get_jail_configuration()
-    
-    def test_get_jail_configuration_dangerous_remote_tmp(self, jail_connection, test_helper):
-        """Test configuration loading with dangerous remote_tmp path."""
-        config = {
-            'jail_host': 'host.example.com',
-            'remote_tmp': '/tmp/../etc'  # Path traversal
-        }
-        test_helper.mock_get_option(jail_connection, config)
-        
-        with pytest.raises(AnsibleConnectionFailure):
-            jail_connection._get_jail_configuration()
-    
-    def test_get_jail_configuration_jail_name_override(self, jail_connection, test_helper):
-        """Test jail name override in configuration."""
-        config = {
-            'jail_host': 'host.example.com',
-            'jail_name': 'overridden-jail'
-        }
-        test_helper.mock_get_option(jail_connection, config)
-        
-        original_name = jail_connection.jail_name
-        jail_connection._get_jail_configuration()
-        
-        assert jail_connection.jail_name == 'overridden-jail'
-        assert jail_connection.jail_name != original_name
-    
-    def test_get_jail_configuration_invalid_jail_name_override(self, jail_connection, test_helper):
-        """Test invalid jail name override in configuration."""
-        config = {
-            'jail_host': 'host.example.com',
-            'jail_name': 'invalid;jail'
-        }
-        test_helper.mock_get_option(jail_connection, config)
-        
-        with pytest.raises(AnsibleConnectionFailure, match="Invalid jail name format"):
-            jail_connection._get_jail_configuration()
-    
-    def test_get_jail_configuration_timeout_validation(self, jail_connection, test_helper):
-        """Test timeout configuration validation."""
-        config = {
-            'jail_host': 'host.example.com',
-            'timeout': 60
-        }
-        test_helper.mock_get_option(jail_connection, config)
-        
-        jail_connection._get_jail_configuration()
-        assert jail_connection.connection_timeout == 60
-        
-        # Test invalid timeout
-        config['timeout'] = 'invalid'
-        test_helper.mock_get_option(jail_connection, config)
-        
-        # Should not raise exception, just use default
-        jail_connection._get_jail_configuration()
+class TestJailRootProbe:
+    def test_caches_across_calls(self, make_conn):
+        conn = make_conn()
+        conn._connect()
+        conn.ssh_exec.return_value = (0, b"/jail/testjail\n", b"")
+
+        assert conn._resolve_jail_root() == "/jail/testjail"
+        assert conn._resolve_jail_root() == "/jail/testjail"
+        conn.ssh_exec.assert_called_once()
+
+    def test_uses_privesc_and_jail_name(self, make_conn):
+        conn = make_conn(
+            {"privilege_escalation": "sudo", "jail_name": "blog"},
+        )
+        conn._connect()
+        conn.ssh_exec.return_value = (0, b"/jails/blog\n", b"")
+
+        conn._resolve_jail_root()
+
+        cmd = conn.ssh_exec.call_args.args[0]
+        assert cmd == "sudo jls -j blog path"
+
+    def test_missing_jail_fails_clearly(self, make_conn):
+        conn = make_conn()
+        conn._connect()
+        conn.ssh_exec.return_value = (1, b"", b"jls: jail not found\n")
+        with pytest.raises(AnsibleConnectionFailure, match="Cannot access jail"):
+            conn._resolve_jail_root()
+
+    def test_empty_root_fails(self, make_conn):
+        conn = make_conn()
+        conn._connect()
+        conn.ssh_exec.return_value = (0, b"", b"")
+        with pytest.raises(AnsibleConnectionFailure, match="no filesystem root"):
+            conn._resolve_jail_root()
+
+    def test_whitespace_only_root_fails(self, make_conn):
+        """Regression: ``b"\\n"`` used to IndexError before the fix."""
+        conn = make_conn()
+        conn._connect()
+        conn.ssh_exec.return_value = (0, b"\n", b"")
+        with pytest.raises(AnsibleConnectionFailure, match="no filesystem root"):
+            conn._resolve_jail_root()
 
 
-class TestSSHConnectionManagement:
-    """Test SSH connection creation and management."""
-    
-    def test_create_ssh_connection_success(self, jail_connection, mock_display):
-        """Test successful SSH connection creation."""
-        jail_connection.jail_host = "host.example.com"
-        
-        with patch('jailexec.SSHConnection') as mock_ssh_class:
-            mock_ssh_instance = Mock()
-            mock_ssh_class.return_value = mock_ssh_instance
-            
-            result = jail_connection._create_ssh_connection()
-            
-            assert result == mock_ssh_instance
-            mock_ssh_instance._connect.assert_called_once()
-    
-    def test_create_ssh_connection_with_retry(self, jail_connection, mock_display):
-        """Test SSH connection creation with retry logic."""
-        jail_connection.jail_host = "host.example.com"
-        
-        with patch('jailexec.SSHConnection') as mock_ssh_class:
-            mock_ssh_instance = Mock()
-            mock_ssh_instance._connect.side_effect = [
-                AnsibleConnectionFailure("First attempt fails"),
-                None  # Second attempt succeeds
-            ]
-            mock_ssh_class.return_value = mock_ssh_instance
-            
-            result = jail_connection._create_ssh_connection()
-            
-            assert result == mock_ssh_instance
-            assert mock_ssh_instance._connect.call_count == 2
-    
-    def test_create_ssh_connection_all_retries_fail(self, jail_connection, mock_display):
-        """Test SSH connection creation when all retries fail."""
-        jail_connection.jail_host = "host.example.com"
-        
-        with patch('jailexec.SSHConnection') as mock_ssh_class:
-            mock_ssh_instance = Mock()
-            mock_ssh_instance._connect.side_effect = AnsibleConnectionFailure("Connection failed")
-            mock_ssh_class.return_value = mock_ssh_instance
-            
-            with pytest.raises(AnsibleConnectionFailure, match="Connection failed"):
-                jail_connection._create_ssh_connection()
+class TestProperties:
+    def test_jail_name_from_inventory(self, make_conn):
+        conn = make_conn(remote_addr="blog")
+        assert conn.jail_name == "blog"
 
+    def test_jail_name_override(self, make_conn):
+        conn = make_conn({"jail_name": "explicit"}, remote_addr="ignored")
+        assert conn.jail_name == "explicit"
 
-class TestConnectionLifecycle:
-    """Test connection lifecycle methods."""
-    
-    def test_connect_full_lifecycle(self, jail_connection, sample_config, test_helper, mock_ssh_connection):
-        """Test full connection lifecycle."""
-        # Setup configuration
-        test_helper.mock_get_option(jail_connection, sample_config)
-        
-        # Setup SSH connection mock
-        jail_connection._host_connection = mock_ssh_connection
-        
-        # Setup successful jail verification
-        test_helper.setup_ssh_exec_results(mock_ssh_connection, {
-            'doas jls -j testjail': (0, b"testjail running", b"")
-        })
-        
-        # Test connection
-        result = jail_connection._connect()
-        
-        assert result == jail_connection
-        assert jail_connection._connected is True
-        assert jail_connection.jail_host == sample_config['jail_host']
-    
-    def test_connect_already_connected(self, jail_connection):
-        """Test connection when already connected."""
-        jail_connection._connected = True
-        
-        result = jail_connection._connect()
-        
-        assert result == jail_connection
-        # Should not attempt to reconnect
-    
-    def test_close_connection(self, jail_connection, mock_ssh_connection):
-        """Test connection cleanup."""
-        jail_connection._host_connection = mock_ssh_connection
-        jail_connection._jail_root_cache = "/jail/root"
-        jail_connection._connected = True
-        
-        jail_connection.close()
-        
-        assert mock_ssh_connection.connected is False
-        assert jail_connection._jail_root_cache is None
-        assert jail_connection._host_connection is None
+    def test_jail_user_default(self, make_conn):
+        assert make_conn().jail_user == "root"
+
+    def test_jail_user_blank_falls_back_to_root(self, make_conn):
+        conn = make_conn({"jail_user": "   "})
+        assert conn.jail_user == "root"
+
+    def test_privesc_default(self, make_conn):
+        assert make_conn().privesc == "doas"
+
+    def test_privesc_sudo(self, make_conn):
+        conn = make_conn({"privilege_escalation": "sudo"})
+        assert conn.privesc == "sudo"
+
+    def test_privesc_invalid_rejected_by_ansible(self, make_conn):
+        """Ansible enforces ``choices`` at set_option time."""
+        from ansible.errors import AnsibleOptionsError
+
+        conn = make_conn()
+        with pytest.raises(AnsibleOptionsError, match="Invalid value 'su'"):
+            conn.set_option("privilege_escalation", "su")

@@ -166,6 +166,8 @@ cython_debug/
 hosts
 inventory
 test-inventory
+# Local ansible.cfg used to point Ansible at this checkout for dev/testing.
+ansible.cfg
 
 # macOS
 .DS_Store
