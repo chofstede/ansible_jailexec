@@ -105,6 +105,7 @@ ansible -i hosts.ini freebsd_jails -m community.general.pkgng -a "name=nginx sta
 | `ansible_jail_host` | ✅ | — | Hostname or IP of the FreeBSD host that runs the jail. |
 | `ansible_jail_name` | | inventory hostname | Override the jail name if it differs from the inventory hostname. |
 | `ansible_jail_user` | | `root` | User to run commands as inside the jail. |
+| `ansible_jail_root` | | auto-detected via `jls -j <name> path` | Absolute on-host path of the jail. Set this for nested or VNET jail setups where the probe returns an unexpected path. |
 | `ansible_jail_privilege_escalation` | | `doas` | Host-side privilege escalation for `jls`/`jexec`. One of `doas`, `sudo`. |
 
 ### SSH options

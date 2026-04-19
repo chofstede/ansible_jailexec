@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 from ansible.errors import AnsibleConnectionFailure, AnsibleError
 
-from jailexec import JAIL_NAME_RE, _decode, ensure_no_traversal, validate_jail_name
+from jailexec import (
+    JAIL_NAME_RE,
+    _decode,
+    ensure_no_traversal,
+    validate_jail_name,
+    validate_jail_root,
+)
 
 
 class TestValidateJailName:
@@ -85,6 +91,36 @@ def test_jail_name_regex_pattern():
     assert JAIL_NAME_RE.match("abc-123.test_ok")
     assert not JAIL_NAME_RE.match("-bad")
     assert not JAIL_NAME_RE.match(".bad")
+
+
+class TestValidateJailRoot:
+    @pytest.mark.parametrize(
+        "path,expected",
+        [
+            ("/jail/web", "/jail/web"),
+            ("  /jail/web  ", "/jail/web"),
+            ("/jail/web/", "/jail/web"),
+            ("/jail//web", "/jail/web"),
+            ("/", "/"),
+        ],
+    )
+    def test_valid(self, path, expected):
+        assert validate_jail_root(path) == expected
+
+    @pytest.mark.parametrize("path", ["", "   ", None])
+    def test_empty_rejected(self, path):
+        with pytest.raises(AnsibleConnectionFailure, match="cannot be empty"):
+            validate_jail_root(path)
+
+    @pytest.mark.parametrize("path", ["relative/path", "jail/web", "./jail"])
+    def test_relative_rejected(self, path):
+        with pytest.raises(AnsibleConnectionFailure, match="absolute path"):
+            validate_jail_root(path)
+
+    @pytest.mark.parametrize("path", ["/jail/../etc", "/../escape", "/a/b/../c"])
+    def test_traversal_rejected(self, path):
+        with pytest.raises(AnsibleError, match="traversal"):
+            validate_jail_root(path)
 
 
 class TestDecode:

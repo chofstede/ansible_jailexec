@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-04-19
+
+### Added
+- `ansible_jail_root` option to override the on-host filesystem path of the jail instead of probing it with `jls -j <name> path`. Useful for nested or VNET jail setups where the probe returns an unexpected path. Thanks to @grisuthedragon for suggesting the feature in #4.
+
 ## [1.1.0] - 2026-04-19
 
 This release is a ground-up refactor of the plugin. The external behavior is unchanged for correct configurations, but the implementation is roughly a quarter the size, inherits all options from Ansible's built-in `ssh` plugin, and ships with a much tighter test suite.

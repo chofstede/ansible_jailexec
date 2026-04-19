@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from ansible.errors import AnsibleConnectionFailure
+from ansible.errors import AnsibleConnectionFailure, AnsibleError
 
 
 class TestConnect:
@@ -91,6 +91,33 @@ class TestJailRootProbe:
         with pytest.raises(AnsibleConnectionFailure, match="no filesystem root"):
             conn._resolve_jail_root()
 
+    def test_override_skips_probe(self, make_conn):
+        conn = make_conn({"jail_root": "/mnt/jails/web"})
+        conn._connect()
+
+        assert conn._resolve_jail_root() == "/mnt/jails/web"
+        conn.ssh_exec.assert_not_called()
+
+    def test_override_is_normalized(self, make_conn):
+        conn = make_conn({"jail_root": "  /mnt/jails/web/  "})
+        conn._connect()
+
+        assert conn._resolve_jail_root() == "/mnt/jails/web"
+
+    def test_override_rejects_traversal(self, make_conn):
+        conn = make_conn({"jail_root": "/mnt/../etc"})
+        conn._connect()
+
+        with pytest.raises(AnsibleError, match="traversal"):
+            conn._resolve_jail_root()
+
+    def test_override_rejects_relative(self, make_conn):
+        conn = make_conn({"jail_root": "jails/web"})
+        conn._connect()
+
+        with pytest.raises(AnsibleConnectionFailure, match="absolute path"):
+            conn._resolve_jail_root()
+
 
 class TestProperties:
     def test_jail_name_from_inventory(self, make_conn):
@@ -130,6 +157,21 @@ class TestProperties:
             conn.set_option("privilege_escalation", "su")
         except AnsibleOptionsError:
             return  # ansible-core >= 2.20 path
+        with pytest.raises(
+            AnsibleConnectionFailure, match="Invalid privilege_escalation"
+        ):
+            _ = conn.privesc
+
+    def test_privesc_runtime_guard(self, make_conn, monkeypatch):
+        """Runtime guard must fire even if ``set_option`` accepted the value.
+
+        On ansible-core >= 2.20, ``set_option`` rejects out-of-choices values
+        before they land. This test bypasses that layer to exercise the
+        defense-in-depth raise inside the ``privesc`` property, which covers
+        ansible-core < 2.20 where choices enforcement is deferred.
+        """
+        conn = make_conn()
+        monkeypatch.setattr(conn, "get_option", lambda name: "su")
         with pytest.raises(
             AnsibleConnectionFailure, match="Invalid privilege_escalation"
         ):

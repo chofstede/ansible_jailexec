@@ -52,6 +52,18 @@ DOCUMENTATION = """
             required: true
             vars:
                 - name: ansible_jail_host
+        jail_root:
+            description:
+                - Absolute on-host filesystem path of the jail, used as the
+                  base for put_file and fetch_file.
+                - If unset, the plugin probes the host with
+                  ``jls -j <name> path`` on the first file transfer.
+                - Set this for nested or VNET jail setups where the probe
+                  does not return the expected path.
+            type: str
+            version_added: "1.2.0"
+            vars:
+                - name: ansible_jail_root
         jail_user:
             description: User to run commands as inside the jail.
             type: str
@@ -120,6 +132,22 @@ def ensure_no_traversal(path):
     """Reject paths containing a ``..`` component (path traversal)."""
     if path and ".." in path.replace("\\", "/").split("/"):
         raise AnsibleError(f"Path contains '..' traversal: {path}")
+
+
+def validate_jail_root(path):
+    """Normalize and validate a user-provided jail-root override.
+
+    Must be a non-empty absolute POSIX path without any ``..`` components.
+    """
+    path = (path or "").strip()
+    if not path:
+        raise AnsibleConnectionFailure("ansible_jail_root cannot be empty")
+    if not path.startswith("/"):
+        raise AnsibleConnectionFailure(
+            f"ansible_jail_root must be an absolute path, got {path!r}"
+        )
+    ensure_no_traversal(path)
+    return posixpath.normpath(path)
 
 
 def _decode(data):
@@ -203,10 +231,21 @@ class Connection(SSHConnection):
     def _resolve_jail_root(self):
         """Look up and cache the on-host filesystem path of the jail.
 
-        Deferred until the first file operation so that exec-only workloads
-        don't pay for an extra SSH round trip on connect.
+        If ``ansible_jail_root`` is set, that value is used verbatim and no
+        SSH probe happens. Otherwise the path is resolved via
+        ``jls -j <name> path`` on the first file operation, then cached.
         """
         if self._jail_root:
+            return self._jail_root
+
+        override = self.get_option("jail_root")
+        if override:
+            self._jail_root = validate_jail_root(override)
+            display.vvv(
+                f"jailexec: jail {self.jail_name!r} root is {self._jail_root} "
+                "(from ansible_jail_root)",
+                host=self.jail_name,
+            )
             return self._jail_root
 
         name = self.jail_name
