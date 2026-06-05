@@ -71,10 +71,14 @@ DOCUMENTATION = """
             vars:
                 - name: ansible_jail_user
         privilege_escalation:
-            description: Command used on the jail host to run jexec as root.
+            description:
+                - Command used on the jail host to run jexec as root.
+                - Set to C(none) to invoke jexec directly with no wrapper.
+                  Use this when you already SSH to the host as root (so no
+                  doas/sudo is installed or needed).
             type: str
             default: doas
-            choices: [doas, sudo]
+            choices: [doas, sudo, none]
             vars:
                 - name: ansible_jail_privilege_escalation
 """
@@ -102,7 +106,7 @@ globals().update(DOCUMENTATION=_extend_with_ssh_options(DOCUMENTATION))
 
 MAX_JAIL_NAME_LENGTH = 255
 JAIL_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
-PRIVESC_CHOICES = ("doas", "sudo")
+PRIVESC_CHOICES = ("doas", "sudo", "none")
 # /tmp is on the remote jail host, not the Ansible controller. File names are
 # randomized via ``os.urandom`` in ``put_file``, which defeats predictable-name
 # attacks. Bandit's B108 check is about local-tmp usage and does not apply.
@@ -198,6 +202,16 @@ class Connection(SSHConnection):
             )
         return value
 
+    def _privesc_argv(self):
+        """Argv prefix for privilege escalation; empty when set to ``none``.
+
+        Hosts reached as root (e.g. via a hardware-backed key) often have no
+        doas/sudo installed, so prepending one would fail with ``not found``.
+        ``none`` runs jexec directly.
+        """
+        value = self.privesc
+        return [] if value == "none" else [value]
+
     # ---- connect / lifecycle --------------------------------------------
 
     def _connect(self):
@@ -250,7 +264,7 @@ class Connection(SSHConnection):
 
         name = self.jail_name
         rc, stdout, stderr = super().exec_command(
-            _shelljoin(self.privesc, "jls", "-j", name, "path")
+            _shelljoin(*self._privesc_argv(), "jls", "-j", name, "path")
         )
         if rc != 0:
             msg = _decode(stderr).strip() or "jail not found or inaccessible"
@@ -277,7 +291,7 @@ class Connection(SSHConnection):
         if not cmd or not str(cmd).strip():
             raise AnsibleError("Command cannot be empty")
 
-        argv = [self.privesc, "jexec"]
+        argv = [*self._privesc_argv(), "jexec"]
         if self.jail_user != "root":
             argv += ["-u", self.jail_user]
         argv += [self.jail_name, "/bin/sh", "-c", cmd]
@@ -297,11 +311,12 @@ class Connection(SSHConnection):
         super().put_file(in_path, staged)
         # Single round-trip: mkdir + move. Both go through privilege
         # escalation because the destination lives inside the jail root,
-        # which is typically only writable by root on the host.
-        pe = shlex.quote(self.privesc)
+        # which is typically only writable by root on the host (a no-op
+        # prefix when privilege_escalation is ``none`` and we're already root).
+        prefix = self._privesc_argv()
         move = (
-            f"{pe} mkdir -p {shlex.quote(dest_dir)} && "
-            f"{pe} mv {shlex.quote(staged)} {shlex.quote(dest)}"
+            f"{_shelljoin(*prefix, 'mkdir', '-p', dest_dir)} && "
+            f"{_shelljoin(*prefix, 'mv', staged, dest)}"
         )
         rc, _, stderr = super().exec_command(move)
         if rc != 0:

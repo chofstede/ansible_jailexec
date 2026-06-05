@@ -56,6 +56,35 @@ class TestExecWrapping:
         parts = shlex.split(_last_exec_cmd(conn))
         assert parts[0] == "sudo"
 
+    def test_none_privesc_runs_jexec_directly(self, make_conn):
+        """privilege_escalation=none drops the doas/sudo wrapper entirely."""
+        conn = make_conn({"privilege_escalation": "none"})
+        conn._connect()
+        conn.ssh_exec.reset_mock()
+
+        conn.exec_command("true")
+
+        parts = shlex.split(_last_exec_cmd(conn))
+        assert parts == ["jexec", "testjail", "/bin/sh", "-c", "true"]
+
+    def test_none_privesc_still_honors_jail_user(self, make_conn):
+        conn = make_conn({"privilege_escalation": "none", "jail_user": "postgres"})
+        conn._connect()
+        conn.ssh_exec.reset_mock()
+
+        conn.exec_command("psql -l")
+
+        parts = shlex.split(_last_exec_cmd(conn))
+        assert parts == [
+            "jexec",
+            "-u",
+            "postgres",
+            "testjail",
+            "/bin/sh",
+            "-c",
+            "psql -l",
+        ]
+
     def test_empty_command_rejected(self, make_conn):
         conn = make_conn()
         conn._connect()

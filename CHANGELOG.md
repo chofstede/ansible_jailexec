@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-06-05
+
+### Added
+- `none` choice for `ansible_jail_privilege_escalation`. When set, the plugin invokes `jls`/`jexec`/`mkdir`/`mv`/`rm` directly with no `doas`/`sudo` wrapper. Use it when you already SSH to the jail host as root and have no privilege-escalation helper installed — previously the hardcoded `doas`/`sudo` prefix failed with `doas: not found` (exit 127), surfacing as a misleading "Failed to create temporary directory" error. Reported in #3.
+
 ## [1.2.0] - 2026-04-19
 
 ### Added

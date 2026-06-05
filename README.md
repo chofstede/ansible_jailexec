@@ -106,7 +106,7 @@ ansible -i hosts.ini freebsd_jails -m community.general.pkgng -a "name=nginx sta
 | `ansible_jail_name` | | inventory hostname | Override the jail name if it differs from the inventory hostname. |
 | `ansible_jail_user` | | `root` | User to run commands as inside the jail. |
 | `ansible_jail_root` | | auto-detected via `jls -j <name> path` | Absolute on-host path of the jail. Set this for nested or VNET jail setups where the probe returns an unexpected path. |
-| `ansible_jail_privilege_escalation` | | `doas` | Host-side privilege escalation for `jls`/`jexec`. One of `doas`, `sudo`. |
+| `ansible_jail_privilege_escalation` | | `doas` | Host-side privilege escalation for `jls`/`jexec`. One of `doas`, `sudo`, `none`. Use `none` when you already SSH to the host as root and have no `doas`/`sudo`. |
 
 ### SSH options
 
@@ -122,7 +122,7 @@ ansible-doc -t connection ssh
 
 There are **two** places where privileges can be escalated, and it's easy to conflate them:
 
-1. **`ansible_jail_privilege_escalation`** (this plugin) — runs `jls`/`jexec`/`mkdir`/`mv`/`rm` **on the host** as root so the plugin can enter the jail and write into its filesystem. Default: `doas`.
+1. **`ansible_jail_privilege_escalation`** (this plugin) — runs `jls`/`jexec`/`mkdir`/`mv`/`rm` **on the host** as root so the plugin can enter the jail and write into its filesystem. Default: `doas`. Set it to `none` when the SSH user is already root on the host (so no `doas`/`sudo` is installed); the plugin then invokes `jexec` directly.
 2. **Ansible `become`** (`become: yes`, `--become`, `ansible_become_method`) — runs the **task payload inside the jail** under a different user. Use this if `ansible_jail_user` is non-root and the task needs root inside the jail.
 
 Typical setup: leave `ansible_jail_user=root` (the default) and skip `become` entirely; the plugin's own privilege escalation is already enough.

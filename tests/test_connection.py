@@ -69,6 +69,16 @@ class TestJailRootProbe:
         cmd = conn.ssh_exec.call_args.args[0]
         assert cmd == "sudo jls -j blog path"
 
+    def test_none_privesc_probes_without_wrapper(self, make_conn):
+        conn = make_conn({"privilege_escalation": "none", "jail_name": "blog"})
+        conn._connect()
+        conn.ssh_exec.return_value = (0, b"/jails/blog\n", b"")
+
+        conn._resolve_jail_root()
+
+        cmd = conn.ssh_exec.call_args.args[0]
+        assert cmd == "jls -j blog path"
+
     def test_missing_jail_fails_clearly(self, make_conn):
         conn = make_conn()
         conn._connect()
@@ -141,6 +151,18 @@ class TestProperties:
     def test_privesc_sudo(self, make_conn):
         conn = make_conn({"privilege_escalation": "sudo"})
         assert conn.privesc == "sudo"
+
+    def test_privesc_none(self, make_conn):
+        conn = make_conn({"privilege_escalation": "none"})
+        assert conn.privesc == "none"
+
+    def test_privesc_argv_empty_when_none(self, make_conn):
+        conn = make_conn({"privilege_escalation": "none"})
+        assert conn._privesc_argv() == []
+
+    def test_privesc_argv_wraps_when_set(self, make_conn):
+        assert make_conn().privesc == "doas"
+        assert make_conn()._privesc_argv() == ["doas"]
 
     def test_privesc_invalid_is_rejected(self, make_conn):
         """Bad ``privilege_escalation`` values must never reach a shell.

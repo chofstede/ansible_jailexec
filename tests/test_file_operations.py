@@ -60,6 +60,20 @@ class TestPutFile:
         assert conn.ssh_exec.call_args_list[0].args[0] == "doas jls -j testjail path"
         assert conn._jail_root == "/jail/testjail"
 
+    def test_none_privesc_omits_wrapper_in_move(self, make_conn):
+        conn = _connect_with_cached_root(make_conn, {"privilege_escalation": "none"})
+        conn.ssh_exec.return_value = (0, b"", b"")
+
+        conn.put_file("/local/foo", "/etc/foo.conf")
+
+        move_cmd = conn.ssh_exec.call_args.args[0]
+        assert "doas" not in move_cmd and "sudo" not in move_cmd
+        assert re.fullmatch(
+            r"mkdir -p /jail/testjail/etc && "
+            r"mv /tmp/ansible-jailexec-[0-9a-f]+ /jail/testjail/etc/foo\.conf",
+            move_cmd,
+        )
+
     def test_rejects_traversal(self, make_conn):
         conn = _connect_with_cached_root(make_conn)
         with pytest.raises(AnsibleError, match="traversal"):
