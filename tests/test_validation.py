@@ -7,10 +7,10 @@ from ansible.errors import AnsibleConnectionFailure, AnsibleError
 
 from jailexec import (
     JAIL_NAME_RE,
+    Connection,
     _decode,
     ensure_no_traversal,
     validate_jail_name,
-    validate_jail_root,
 )
 
 
@@ -93,34 +93,31 @@ def test_jail_name_regex_pattern():
     assert not JAIL_NAME_RE.match(".bad")
 
 
-class TestValidateJailRoot:
+class TestInJailPath:
+    """Paths are normalized to absolute in-jail paths before quoting."""
+
     @pytest.mark.parametrize(
         "path,expected",
         [
-            ("/jail/web", "/jail/web"),
-            ("  /jail/web  ", "/jail/web"),
-            ("/jail/web/", "/jail/web"),
-            ("/jail//web", "/jail/web"),
+            ("/etc/foo.conf", "/etc/foo.conf"),
+            ("etc/foo.conf", "/etc/foo.conf"),
+            ("//etc//foo", "/etc/foo"),
+            ("/etc/foo/", "/etc/foo"),
             ("/", "/"),
         ],
     )
-    def test_valid(self, path, expected):
-        assert validate_jail_root(path) == expected
+    def test_normalizes(self, path, expected):
+        assert Connection._in_jail_path(path) == expected
 
     @pytest.mark.parametrize("path", ["", "   ", None])
     def test_empty_rejected(self, path):
-        with pytest.raises(AnsibleConnectionFailure, match="cannot be empty"):
-            validate_jail_root(path)
+        with pytest.raises(AnsibleError, match="empty"):
+            Connection._in_jail_path(path)
 
-    @pytest.mark.parametrize("path", ["relative/path", "jail/web", "./jail"])
-    def test_relative_rejected(self, path):
-        with pytest.raises(AnsibleConnectionFailure, match="absolute path"):
-            validate_jail_root(path)
-
-    @pytest.mark.parametrize("path", ["/jail/../etc", "/../escape", "/a/b/../c"])
+    @pytest.mark.parametrize("path", ["/etc/../foo", "../escape", ".."])
     def test_traversal_rejected(self, path):
         with pytest.raises(AnsibleError, match="traversal"):
-            validate_jail_root(path)
+            Connection._in_jail_path(path)
 
 
 class TestDecode:

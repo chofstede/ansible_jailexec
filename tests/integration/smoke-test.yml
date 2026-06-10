@@ -1,24 +1,20 @@
 ---
 - name: Smoke tests for jailexec connection plugin
-  hosts: testjail
-  gather_facts: no
+  hosts: all
+  gather_facts: false
+  vars:
+    smoke_file: /tmp/ansible-jailexec-smoke.txt
+    smoke_content: "jailexec smoke test payload\n"
+    fetch_dest: /tmp/ansible-jailexec-smoke-fetched-{{ inventory_hostname }}.txt
   tasks:
     - name: Test basic connectivity with ping
       ansible.builtin.ping:
       register: ping_result
 
-    - name: Display ping result
-      ansible.builtin.debug:
-        var: ping_result
-
     - name: Get hostname inside jail
       ansible.builtin.command: hostname
       register: hostname_result
       changed_when: false
-
-    - name: Display hostname
-      ansible.builtin.debug:
-        msg: "Jail hostname: {{ hostname_result.stdout }}"
 
     - name: Check FreeBSD version
       ansible.builtin.command: uname -a
@@ -27,50 +23,59 @@
 
     - name: Display system information
       ansible.builtin.debug:
-        msg: "System info: {{ uname_result.stdout }}"
+        msg: "Jail '{{ hostname_result.stdout }}': {{ uname_result.stdout }}"
 
-    - name: Test Python availability in jail
-      ansible.builtin.command: "{{ ansible_python_interpreter | default('/usr/local/bin/python3') }} --version"
-      register: python_version
-      changed_when: false
-
-    - name: Display Python version
-      ansible.builtin.debug:
-        msg: "Python version: {{ python_version.stdout }}"
-
-    - name: Verify doas privilege escalation works
+    - name: Verify commands run as the expected jail user
       ansible.builtin.command: whoami
-      become: yes
-      register: whoami_root
+      register: whoami_result
       changed_when: false
 
-    - name: Assert running as root with doas
+    - name: Assert jail user
       ansible.builtin.assert:
         that:
-          - whoami_root.stdout == "root"
-        fail_msg: "Privilege escalation with doas failed"
+          - whoami_result.stdout == (ansible_jail_user | default('root'))
+        fail_msg: "Expected to run as {{ ansible_jail_user | default('root') }}, got {{ whoami_result.stdout }}"
 
-    - name: Test file creation in jail
-      ansible.builtin.file:
-        path: /tmp/ansible-test-{{ ansible_date_time.epoch }}
-        state: touch
-      register: file_creation
+    - name: Write a file into the jail (exercises put_file)
+      ansible.builtin.copy:
+        content: "{{ smoke_content }}"
+        dest: "{{ smoke_file }}"
+        mode: "0644"
 
-    - name: Verify file was created
-      ansible.builtin.stat:
-        path: "{{ file_creation.path }}"
-      register: file_stat
+    - name: Read the file back inside the jail (exercises exec path)
+      ansible.builtin.slurp:
+        src: "{{ smoke_file }}"
+      register: slurped
 
-    - name: Assert file exists
+    - name: Assert in-jail content round-trips
       ansible.builtin.assert:
         that:
-          - file_stat.stat.exists
-        fail_msg: "Test file was not created successfully"
+          - slurped.content | b64decode == smoke_content
+        fail_msg: "File content inside the jail does not match what was copied"
 
-    - name: Clean up test file
+    - name: Fetch the file to the controller (exercises fetch_file)
+      ansible.builtin.fetch:
+        src: "{{ smoke_file }}"
+        dest: "{{ fetch_dest }}"
+        flat: true
+      register: fetched
+
+    - name: Assert fetched content matches
+      ansible.builtin.assert:
+        that:
+          - fetched.checksum == smoke_content | hash('sha1')
+        fail_msg: "Fetched file content does not match"
+
+    - name: Clean up test file in the jail
       ansible.builtin.file:
-        path: "{{ file_creation.path }}"
+        path: "{{ smoke_file }}"
         state: absent
+
+    - name: Clean up fetched file on the controller
+      ansible.builtin.file:
+        path: "{{ fetch_dest }}"
+        state: absent
+      delegate_to: localhost
 
     - name: Test command with specific working directory
       ansible.builtin.command: pwd
@@ -88,8 +93,8 @@
     - name: Summary
       ansible.builtin.debug:
         msg: |
-          All smoke tests passed successfully!
+          All smoke tests passed!
           - Ping: {{ ping_result.ping }}
           - Hostname: {{ hostname_result.stdout }}
-          - File operations: Success
-          - Command execution: Success
+          - Jail user: {{ whoami_result.stdout }}
+          - put_file / slurp / fetch_file round-trip: OK

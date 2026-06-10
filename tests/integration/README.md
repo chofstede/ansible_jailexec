@@ -9,7 +9,7 @@ To run the integration tests in GitHub Actions, you need to configure the follow
 ### Required Secrets
 
 1. **FREEBSD_HOST**: The IPv6 address or hostname of your FreeBSD server
-   - Example: `2a13:e3c1:400e:1337::672`
+   - Example: `2001:db8::10`
 
 2. **FREEBSD_USER**: The SSH username for connecting to the FreeBSD host
    - Example: `ansible`
@@ -21,7 +21,7 @@ To run the integration tests in GitHub Actions, you need to configure the follow
    - Copy the entire private key content including headers
 
 4. **FREEBSD_HOST_KEY**: The SSH host key of your FreeBSD server
-   - Get it with: `ssh-keyscan -t ed25519 2a13:e3c1:400e:1337::672`
+   - Get it with: `ssh-keyscan -t ed25519 2001:db8::10`
    - This prevents SSH host verification issues
 
 ## Setting up GitHub Secrets
@@ -40,12 +40,29 @@ To run the tests locally:
    cp test-inventory.ini.example test-inventory.ini
    ```
 
-2. Edit `test-inventory.ini` with your FreeBSD server details
+2. Edit `test-inventory.ini` with your FreeBSD server details. Note:
+   - The inventory hostname is the **jail name** (override with `ansible_jail_name`).
+   - `ansible_jail_host` is **required** — it is the FreeBSD host running the jail.
+   - The SSH user needs a passwordless `doas` (or `sudo`) rule for `jexec` on the
+     host, e.g. `permit nopass ansible as root cmd jexec` — or set
+     `ansible_jail_privilege_escalation=none` if you SSH in as root.
 
 3. Run the smoke tests:
    ```bash
    ansible-playbook -i test-inventory.ini smoke-test.yml -v
    ```
+
+If a task fails with `Failed to create temporary directory`, the `jexec`
+wrapper itself is failing on the host. Re-run with `-vvvv` to see the stderr,
+or reproduce it manually:
+
+```bash
+ssh <user>@<jail-host> 'doas jexec <jail-name> /bin/sh -c id'
+```
+
+Typical causes: the jail isn't running or is named differently (`jls` on the
+host shows the real names), the `doas`/`sudo` rule for `jexec` is missing, or
+`doas` prompts for a password (use `permit nopass`).
 
 ## Test Coverage
 
