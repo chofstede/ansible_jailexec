@@ -42,9 +42,14 @@ DOCUMENTATION = """
     version_added: "1.1.0"
     options:
         jail_name:
-            description: Jail name. Defaults to the inventory hostname.
+            description:
+                - Jail name. Defaults to the inventory hostname (not to
+                  ansible_host, which is the address of the jail host).
             type: str
             vars:
+                # Later entries win: an explicit ansible_jail_name overrides
+                # the inventory_hostname default.
+                - name: inventory_hostname
                 - name: ansible_jail_name
         jail_host:
             description: Hostname or IP of the FreeBSD host that runs the jail.
@@ -54,18 +59,18 @@ DOCUMENTATION = """
                 - name: ansible_jail_host
         jail_root:
             description:
-                - Absolute on-host filesystem path of the jail, used as the
-                  base for put_file and fetch_file.
-                - If unset, the plugin probes the host with
-                  ``jls -j <name> path`` on the first file transfer.
-                - Set this for nested or VNET jail setups where the probe
-                  does not return the expected path.
+                - Deprecated and ignored since 2.0.0. File transfers now run
+                  inside the jail via jexec, so the plugin no longer needs
+                  the jail's on-host filesystem path.
+                - Setting it produces a warning and has no other effect.
             type: str
             version_added: "1.2.0"
             vars:
                 - name: ansible_jail_root
         jail_user:
-            description: User to run commands as inside the jail.
+            description:
+                - User to run commands as inside the jail, resolved against
+                  the jail's password database (``jexec -U``).
             type: str
             default: root
             vars:
@@ -108,8 +113,9 @@ MAX_JAIL_NAME_LENGTH = 255
 JAIL_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 PRIVESC_CHOICES = ("doas", "sudo", "none")
 # /tmp is on the remote jail host, not the Ansible controller. File names are
-# randomized via ``os.urandom`` in ``put_file``, which defeats predictable-name
-# attacks. Bandit's B108 check is about local-tmp usage and does not apply.
+# randomized via ``os.urandom`` in ``_staging_path``, which defeats
+# predictable-name attacks. Bandit's B108 check is about local-tmp usage and
+# does not apply.
 STAGING_DIR = "/tmp"  # nosec B108
 STAGING_PREFIX = "ansible-jailexec-"
 
@@ -138,22 +144,6 @@ def ensure_no_traversal(path):
         raise AnsibleError(f"Path contains '..' traversal: {path}")
 
 
-def validate_jail_root(path):
-    """Normalize and validate a user-provided jail-root override.
-
-    Must be a non-empty absolute POSIX path without any ``..`` components.
-    """
-    path = (path or "").strip()
-    if not path:
-        raise AnsibleConnectionFailure("ansible_jail_root cannot be empty")
-    if not path.startswith("/"):
-        raise AnsibleConnectionFailure(
-            f"ansible_jail_root must be an absolute path, got {path!r}"
-        )
-    ensure_no_traversal(path)
-    return posixpath.normpath(path)
-
-
 def _decode(data):
     """Return ``data`` as a str. Bytes are decoded leniently; None becomes ''."""
     if data is None:
@@ -173,10 +163,6 @@ class Connection(SSHConnection):
 
     transport = "jailexec"
     has_pipelining = True
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._jail_root = None
 
     # ---- options ---------------------------------------------------------
 
@@ -212,6 +198,18 @@ class Connection(SSHConnection):
         value = self.privesc
         return [] if value == "none" else [value]
 
+    def _jexec_argv(self):
+        """Shared ``[doas] jexec [-U user] <jail>`` prefix for remote calls.
+
+        ``-U`` resolves the user against the *jail's* password database;
+        ``-u`` would consult the host's, which is not what jail_user means.
+        """
+        argv = [*self._privesc_argv(), "jexec"]
+        if self.jail_user != "root":
+            argv += ["-U", self.jail_user]
+        argv.append(self.jail_name)
+        return argv
+
     # ---- connect / lifecycle --------------------------------------------
 
     def _connect(self):
@@ -223,6 +221,12 @@ class Connection(SSHConnection):
             raise AnsibleConnectionFailure(
                 f"ansible_jail_host is not set for jail {self.jail_name!r}"
             )
+        if self.get_option("jail_root"):
+            display.warning(
+                "ansible_jail_root is deprecated and ignored: file transfers "
+                "now run inside the jail via jexec, so the jail's on-host "
+                "path is no longer needed."
+            )
         # Redirect the inherited SSH plugin at the jail *host* instead of the
         # jail (inventory) name. This is the one hook we need -- everything
         # else comes from the SSH base class.
@@ -231,59 +235,25 @@ class Connection(SSHConnection):
         # SSH's _connect is a no-op on _connected, but ConnectionBase's
         # exec_command/put_file/fetch_file are wrapped with @ensure_connect,
         # which re-enters self._connect() whenever _connected is False. We
-        # flip it here so the jail-root probe issued on first file op (via
-        # super().exec_command) doesn't recurse into us.
+        # flip it here so the internal commands issued by put_file/fetch_file
+        # (via super().exec_command) don't recurse into us.
         self._connected = True
         return self
 
-    def close(self):
-        self._jail_root = None
-        super().close()
+    # ---- paths -----------------------------------------------------------
 
-    # ---- jail metadata ---------------------------------------------------
-
-    def _resolve_jail_root(self):
-        """Look up and cache the on-host filesystem path of the jail.
-
-        If ``ansible_jail_root`` is set, that value is used verbatim and no
-        SSH probe happens. Otherwise the path is resolved via
-        ``jls -j <name> path`` on the first file operation, then cached.
-        """
-        if self._jail_root:
-            return self._jail_root
-
-        override = self.get_option("jail_root")
-        if override:
-            self._jail_root = validate_jail_root(override)
-            display.vvv(
-                f"jailexec: jail {self.jail_name!r} root is {self._jail_root} "
-                "(from ansible_jail_root)",
-                host=self.jail_name,
-            )
-            return self._jail_root
-
-        name = self.jail_name
-        rc, stdout, stderr = super().exec_command(
-            _shelljoin(*self._privesc_argv(), "jls", "-j", name, "path")
-        )
-        if rc != 0:
-            msg = _decode(stderr).strip() or "jail not found or inaccessible"
-            raise AnsibleConnectionFailure(f"Cannot access jail {name!r}: {msg}")
-        lines = _decode(stdout).strip().splitlines()
-        root = lines[0].strip() if lines else ""
-        if not root:
-            raise AnsibleConnectionFailure(
-                f"Jail {name!r} returned no filesystem root (is it running?)"
-            )
-        self._jail_root = root
-        display.vvv(f"jailexec: jail {name!r} root is {root}", host=name)
-        return root
-
-    def _jail_path(self, path):
-        """Map a path inside the jail to its absolute path on the host."""
+    @staticmethod
+    def _in_jail_path(path):
+        """Normalize to an absolute path as seen from inside the jail."""
+        path = str(path or "")
+        if not path.strip():
+            raise AnsibleError("Path cannot be empty")
         ensure_no_traversal(path)
-        root = self._resolve_jail_root()
-        return posixpath.normpath(posixpath.join(root, path.lstrip("/")))
+        return posixpath.normpath("/" + path.lstrip("/"))
+
+    @staticmethod
+    def _staging_path():
+        return posixpath.join(STAGING_DIR, f"{STAGING_PREFIX}{os.urandom(12).hex()}")
 
     # ---- exec / transfer -------------------------------------------------
 
@@ -291,45 +261,69 @@ class Connection(SSHConnection):
         if not cmd or not str(cmd).strip():
             raise AnsibleError("Command cannot be empty")
 
-        argv = [*self._privesc_argv(), "jexec"]
-        if self.jail_user != "root":
-            argv += ["-u", self.jail_user]
-        argv += [self.jail_name, "/bin/sh", "-c", cmd]
-        wrapped = _shelljoin(*argv)
+        wrapped = _shelljoin(*self._jexec_argv(), "/bin/sh", "-c", cmd)
 
         display.vvv(f"jailexec: exec [{self.jail_name}]: {cmd}", host=self.jail_name)
         return super().exec_command(wrapped, in_data=in_data, sudoable=sudoable)
 
     def put_file(self, in_path, out_path):
-        dest = self._jail_path(out_path)
-        dest_dir = posixpath.dirname(dest)
-        staged = posixpath.join(STAGING_DIR, f"{STAGING_PREFIX}{os.urandom(12).hex()}")
+        dest = self._in_jail_path(out_path)
+        staged = self._staging_path()
 
         display.vvv(
             f"jailexec: put_file {in_path} -> jail:{out_path}", host=self.jail_name
         )
         super().put_file(in_path, staged)
-        # Single round-trip: mkdir + move. Both go through privilege
-        # escalation because the destination lives inside the jail root,
-        # which is typically only writable by root on the host (a no-op
-        # prefix when privilege_escalation is ``none`` and we're already root).
-        prefix = self._privesc_argv()
-        move = (
-            f"{_shelljoin(*prefix, 'mkdir', '-p', dest_dir)} && "
-            f"{_shelljoin(*prefix, 'mv', staged, dest)}"
+        # The write happens *inside* the jail: jexec confines mkdir/cat to
+        # the jail's root, so a symlink planted inside the jail cannot
+        # redirect a privileged write onto a host path. The staged file is
+        # handed over as stdin, opened host-side by the unprivileged SSH
+        # login shell. Single extra round trip on the happy path.
+        inner = (
+            f"mkdir -p {shlex.quote(posixpath.dirname(dest))} && "
+            f"cat > {shlex.quote(dest)}"
         )
-        rc, _, stderr = super().exec_command(move)
+        transfer = (
+            f"{_shelljoin(*self._jexec_argv(), '/bin/sh', '-c', inner)}"
+            f" < {shlex.quote(staged)} && rm -f {shlex.quote(staged)}"
+        )
+        # sudoable=False keeps the SSH layer from waiting for an Ansible
+        # become prompt (and from allocating a tty) on plugin-internal
+        # commands; same below.
+        rc, _, stderr = super().exec_command(transfer, sudoable=False)
         if rc != 0:
             # Best-effort cleanup of the orphan staged file; ignore failures.
-            super().exec_command(f"rm -f {shlex.quote(staged)}")
+            super().exec_command(f"rm -f {shlex.quote(staged)}", sudoable=False)
             raise AnsibleError(
                 f"put_file to jail:{out_path} failed: "
                 f"{_decode(stderr).strip() or 'unknown error'}"
             )
 
     def fetch_file(self, in_path, out_path):
-        src = self._jail_path(in_path)
+        src = self._in_jail_path(in_path)
+        staged = self._staging_path()
+
         display.vvv(
             f"jailexec: fetch_file jail:{in_path} -> {out_path}", host=self.jail_name
         )
-        super().fetch_file(src, out_path)
+        # Mirror image of put_file: read inside the jail (symlinks cannot
+        # leak host files, and root-only files are readable when jail_user
+        # is root), stage on the host, then pull the staged copy over SFTP.
+        # ``cat < src`` instead of an argument rules out option injection;
+        # umask keeps the staged copy private to the SSH user.
+        inner = f"cat < {shlex.quote(src)}"
+        read = (
+            f"umask 077; {_shelljoin(*self._jexec_argv(), '/bin/sh', '-c', inner)}"
+            f" > {shlex.quote(staged)}"
+        )
+        rc, _, stderr = super().exec_command(read, sudoable=False)
+        if rc != 0:
+            super().exec_command(f"rm -f {shlex.quote(staged)}", sudoable=False)
+            raise AnsibleError(
+                f"fetch_file from jail:{in_path} failed: "
+                f"{_decode(stderr).strip() or 'unknown error'}"
+            )
+        try:
+            super().fetch_file(staged, out_path)
+        finally:
+            super().exec_command(f"rm -f {shlex.quote(staged)}", sudoable=False)

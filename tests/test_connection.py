@@ -1,9 +1,9 @@
-"""Tests for connection lifecycle, properties, and jail-root resolution."""
+"""Tests for connection lifecycle and properties."""
 
 from __future__ import annotations
 
 import pytest
-from ansible.errors import AnsibleConnectionFailure, AnsibleError
+from ansible.errors import AnsibleConnectionFailure
 
 
 class TestConnect:
@@ -25,108 +25,43 @@ class TestConnect:
         conn._connect()
         conn.ssh_connect_mock.assert_called_once()
 
-    def test_connect_does_not_probe_eagerly(self, make_conn):
-        """Regression: connect must not issue an SSH round trip.
-
-        The jail-root probe is deferred until the first file operation so that
-        exec-only workloads don't pay for the lookup and so that probing can't
-        recurse through ``@ensure_connect``.
-        """
+    def test_connect_issues_no_remote_commands(self, make_conn):
+        """Connect must stay free of extra SSH round trips."""
         conn = make_conn()
         conn._connect()
         assert conn._connected is True
-        assert conn._jail_root is None
         conn.ssh_exec.assert_not_called()
 
-    def test_close_resets_cache(self, make_conn):
+    def test_close_delegates_to_ssh(self, make_conn):
         conn = make_conn()
         conn._connect()
-        conn._jail_root = "/jail/testjail"
         conn.close()
-        assert conn._jail_root is None
         conn.ssh_close_mock.assert_called_once()
 
 
-class TestJailRootProbe:
-    def test_caches_across_calls(self, make_conn):
-        conn = make_conn()
-        conn._connect()
-        conn.ssh_exec.return_value = (0, b"/jail/testjail\n", b"")
+class TestJailRootDeprecation:
+    """``ansible_jail_root`` is obsolete: transfers run inside the jail now."""
 
-        assert conn._resolve_jail_root() == "/jail/testjail"
-        assert conn._resolve_jail_root() == "/jail/testjail"
-        conn.ssh_exec.assert_called_once()
+    @pytest.fixture
+    def warnings(self, monkeypatch):
+        import jailexec
 
-    def test_uses_privesc_and_jail_name(self, make_conn):
-        conn = make_conn(
-            {"privilege_escalation": "sudo", "jail_name": "blog"},
+        captured = []
+        monkeypatch.setattr(
+            jailexec.display, "warning", lambda msg, **kw: captured.append(msg)
         )
-        conn._connect()
-        conn.ssh_exec.return_value = (0, b"/jails/blog\n", b"")
+        return captured
 
-        conn._resolve_jail_root()
-
-        cmd = conn.ssh_exec.call_args.args[0]
-        assert cmd == "sudo jls -j blog path"
-
-    def test_none_privesc_probes_without_wrapper(self, make_conn):
-        conn = make_conn({"privilege_escalation": "none", "jail_name": "blog"})
-        conn._connect()
-        conn.ssh_exec.return_value = (0, b"/jails/blog\n", b"")
-
-        conn._resolve_jail_root()
-
-        cmd = conn.ssh_exec.call_args.args[0]
-        assert cmd == "jls -j blog path"
-
-    def test_missing_jail_fails_clearly(self, make_conn):
-        conn = make_conn()
-        conn._connect()
-        conn.ssh_exec.return_value = (1, b"", b"jls: jail not found\n")
-        with pytest.raises(AnsibleConnectionFailure, match="Cannot access jail"):
-            conn._resolve_jail_root()
-
-    def test_empty_root_fails(self, make_conn):
-        conn = make_conn()
-        conn._connect()
-        conn.ssh_exec.return_value = (0, b"", b"")
-        with pytest.raises(AnsibleConnectionFailure, match="no filesystem root"):
-            conn._resolve_jail_root()
-
-    def test_whitespace_only_root_fails(self, make_conn):
-        """Regression: ``b"\\n"`` used to IndexError before the fix."""
-        conn = make_conn()
-        conn._connect()
-        conn.ssh_exec.return_value = (0, b"\n", b"")
-        with pytest.raises(AnsibleConnectionFailure, match="no filesystem root"):
-            conn._resolve_jail_root()
-
-    def test_override_skips_probe(self, make_conn):
+    def test_setting_jail_root_warns_and_still_connects(self, make_conn, warnings):
         conn = make_conn({"jail_root": "/mnt/jails/web"})
         conn._connect()
+        assert conn._connected is True
+        assert any("ansible_jail_root is deprecated" in w for w in warnings)
 
-        assert conn._resolve_jail_root() == "/mnt/jails/web"
-        conn.ssh_exec.assert_not_called()
-
-    def test_override_is_normalized(self, make_conn):
-        conn = make_conn({"jail_root": "  /mnt/jails/web/  "})
+    def test_no_warning_when_unset(self, make_conn, warnings):
+        conn = make_conn()
         conn._connect()
-
-        assert conn._resolve_jail_root() == "/mnt/jails/web"
-
-    def test_override_rejects_traversal(self, make_conn):
-        conn = make_conn({"jail_root": "/mnt/../etc"})
-        conn._connect()
-
-        with pytest.raises(AnsibleError, match="traversal"):
-            conn._resolve_jail_root()
-
-    def test_override_rejects_relative(self, make_conn):
-        conn = make_conn({"jail_root": "jails/web"})
-        conn._connect()
-
-        with pytest.raises(AnsibleConnectionFailure, match="absolute path"):
-            conn._resolve_jail_root()
+        assert warnings == []
 
 
 class TestProperties:
@@ -137,6 +72,30 @@ class TestProperties:
     def test_jail_name_override(self, make_conn):
         conn = make_conn({"jail_name": "explicit"}, remote_addr="ignored")
         assert conn.jail_name == "explicit"
+
+    def test_jail_name_is_inventory_hostname_not_ansible_host(self, make_conn):
+        """Regression: with ``ansible_host`` set, remote_addr is the host's
+        address, and the plugin used to run ``jexec <ip>`` instead of using
+        the inventory hostname as the jail name."""
+        conn = make_conn(remote_addr="192.0.2.10")
+        conn.set_options(
+            var_options={
+                "ansible_jail_host": "192.0.2.10",
+                "inventory_hostname": "wiki",
+            }
+        )
+        assert conn.jail_name == "wiki"
+
+    def test_explicit_jail_name_beats_inventory_hostname(self, make_conn):
+        conn = make_conn()
+        conn.set_options(
+            var_options={
+                "ansible_jail_host": "jail-host.example.com",
+                "inventory_hostname": "wiki",
+                "ansible_jail_name": "blog",
+            }
+        )
+        assert conn.jail_name == "blog"
 
     def test_jail_user_default(self, make_conn):
         assert make_conn().jail_user == "root"

@@ -38,7 +38,7 @@ class TestExecWrapping:
         assert parts == [
             "doas",
             "jexec",
-            "-u",
+            "-U",  # -U = jail's password database; -u would be the host's
             "postgres",
             "testjail",
             "/bin/sh",
@@ -77,7 +77,7 @@ class TestExecWrapping:
         parts = shlex.split(_last_exec_cmd(conn))
         assert parts == [
             "jexec",
-            "-u",
+            "-U",
             "postgres",
             "testjail",
             "/bin/sh",

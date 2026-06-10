@@ -1,14 +1,23 @@
+# Copy to test-inventory.ini and adjust for your environment.
+#
+# The INVENTORY HOSTNAME is the JAIL NAME on the FreeBSD host (override with
+# ansible_jail_name if they differ). ansible_jail_host is REQUIRED and points
+# at the FreeBSD host that runs the jail.
 [jails]
-# Example inventory for FreeBSD jail testing
-# Replace with your actual FreeBSD server details
-testjail ansible_host=2a13:e3c1:400e:1337::672 ansible_user=ansible ansible_connection=jailexec ansible_python_interpreter=/usr/local/bin/python3
+testjail ansible_connection=jailexec ansible_jail_host=jail-host.example.com ansible_python_interpreter=/usr/local/bin/python3
 
 [jails:vars]
-# SSH connection settings
-ansible_ssh_private_key_file=~/.ssh/id_rsa
-ansible_ssh_common_args='-o StrictHostKeyChecking=yes'
-# Privilege escalation settings for jexec
-ansible_become_method=doas
-ansible_become=yes
-# Optional: specify the jail host if different from ansible_host
-# jail_host=2a13:e3c1:400e:1337::672
+# SSH settings for reaching the jail HOST (every option of the built-in ssh
+# plugin works here).
+ansible_user=ansible
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'
+
+# Host-side privilege escalation used to run jexec: doas (default), sudo, or
+# none (when ansible_user is already root on the host).
+#ansible_jail_privilege_escalation=doas
+
+# User to run tasks as inside the jail (default: root). Note: do NOT set
+# ansible_become=yes globally -- that would require doas/sudo to be installed
+# inside the jail for every task.
+#ansible_jail_user=root

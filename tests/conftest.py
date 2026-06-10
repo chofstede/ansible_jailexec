@@ -40,7 +40,7 @@ def make_conn():
     created = []
 
     def _make(options=None, remote_addr="testjail"):
-        ssh_exec = MagicMock(return_value=(0, b"/jail/testjail\n", b""))
+        ssh_exec = MagicMock(return_value=(0, b"", b""))
         ssh_put = MagicMock(return_value=None)
         ssh_fetch = MagicMock(return_value=None)
         ssh_close = MagicMock(return_value=None)
