@@ -27,7 +27,7 @@ To run the integration tests in GitHub Actions, you need to configure the follow
 ## Setting up GitHub Secrets
 
 1. Go to your repository on GitHub
-2. Navigate to Settings → Secrets and variables → Actions
+2. Navigate to Settings -> Secrets and variables -> Actions
 3. Click "New repository secret" for each secret
 4. Enter the secret name and value
 
@@ -42,9 +42,9 @@ To run the tests locally:
 
 2. Edit `test-inventory.ini` with your FreeBSD server details. Note:
    - The inventory hostname is the **jail name** (override with `ansible_jail_name`).
-   - `ansible_jail_host` is **required** — it is the FreeBSD host running the jail.
+   - `ansible_jail_host` is **required**; it is the FreeBSD host running the jail.
    - The SSH user needs a passwordless `doas` (or `sudo`) rule for `jexec` on the
-     host, e.g. `permit nopass ansible as root cmd jexec` — or set
+     host, e.g. `permit nopass ansible as root cmd jexec`, or set
      `ansible_jail_privilege_escalation=none` if you SSH in as root.
 
 3. Run the smoke tests:

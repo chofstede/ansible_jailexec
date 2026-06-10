@@ -5,13 +5,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [2.0.0] - 2026-06-10
 
-**Security release — upgrading is strongly recommended.** The file-transfer mechanism was rewritten to run inside the jail and the release was verified end-to-end against a real FreeBSD 15.0 jail host (`tests/integration/smoke-test.yml`).
+**Security release, upgrading is strongly recommended.** The file-transfer mechanism was rewritten to run inside the jail and the release was verified end-to-end against a real FreeBSD 15.0 jail host (`tests/integration/smoke-test.yml`).
 
 ### Security
-- **Closed a jail-escape vector in file transfers.** `put_file` used to run `mkdir -p` and `mv` **on the host**, as root, against `<jail root>/<destination>`. Because those commands resolve symlinks, a compromised jail could plant a symlink (e.g. its `/usr/local/etc` pointing at the host's `/etc`) and turn any playbook copy through that path into a root-owned write to an arbitrary host file. Transfers now execute **inside** the jail (`jexec <jail> /bin/sh -c 'mkdir -p … && cat > dest' < staged-file`), so every path resolves within the jail's chroot and cannot reach the host filesystem. `fetch_file` reads through `jexec` the same way.
+- **Closed a jail-escape vector in file transfers.** `put_file` used to run `mkdir -p` and `mv` **on the host**, as root, against `<jail root>/<destination>`. Because those commands resolve symlinks, a compromised jail could plant a symlink (e.g. its `/usr/local/etc` pointing at the host's `/etc`) and turn any playbook copy through that path into a root-owned write to an arbitrary host file. Transfers now execute **inside** the jail (`jexec <jail> /bin/sh -c 'mkdir -p ... && cat > dest' < staged-file`), so every path resolves within the jail's chroot and cannot reach the host filesystem. `fetch_file` reads through `jexec` the same way.
 
 ### Fixed
-- The default jail name is now the **inventory hostname**, as documented. Previously it fell back to the connection address, so an inventory line like `web ansible_host=192.0.2.10 …` ran `jexec "192.0.2.10"` and failed with `jexec: jail "192.0.2.10" not found`. An explicit `ansible_jail_name` still wins.
+- The default jail name is now the **inventory hostname**, as documented. Previously it fell back to the connection address, so an inventory line like `web ansible_host=192.0.2.10 ...` ran `jexec "192.0.2.10"` and failed with `jexec: jail "192.0.2.10" not found`. An explicit `ansible_jail_name` still wins.
 - The bundled integration-test files were stale: `test-inventory.ini.example` used `ansible_host` instead of the required `ansible_jail_host` and set `ansible_become=yes` globally (which needs doas *inside* the jail); `smoke-test.yml` referenced facts with `gather_facts: no`. The smoke test now also round-trips a file through `put_file`/`slurp`/`fetch_file`.
 - `ansible_jail_user` is now passed as `jexec -U` (resolved in the **jail's** password database) instead of `-u` (the **host's**). Previously a user like `postgres` that exists only inside the jail failed with `jexec: : unknown user`, and a same-named host user with a different UID ran with the wrong credentials.
 - `fetch_file` now goes through privilege escalation. Previously it pulled the file over SFTP as the plain SSH user from the host-side path, so files readable only by root inside the jail could not be fetched at all.
@@ -30,7 +30,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [1.3.0] - 2026-06-05
 
 ### Added
-- `none` choice for `ansible_jail_privilege_escalation`. When set, the plugin invokes `jls`/`jexec`/`mkdir`/`mv`/`rm` directly with no `doas`/`sudo` wrapper. Use it when you already SSH to the jail host as root and have no privilege-escalation helper installed — previously the hardcoded `doas`/`sudo` prefix failed with `doas: not found` (exit 127), surfacing as a misleading "Failed to create temporary directory" error. Reported in #3.
+- `none` choice for `ansible_jail_privilege_escalation`. When set, the plugin invokes `jls`/`jexec`/`mkdir`/`mv`/`rm` directly with no `doas`/`sudo` wrapper. Use it when you already SSH to the jail host as root and have no privilege-escalation helper installed; previously the hardcoded `doas`/`sudo` prefix failed with `doas: not found` (exit 127), surfacing as a misleading "Failed to create temporary directory" error. Reported in #3.
 
 ## [1.2.0] - 2026-04-19
 
@@ -42,9 +42,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 This release is a ground-up refactor of the plugin. The external behavior is unchanged for correct configurations, but the implementation is roughly a quarter the size, inherits all options from Ansible's built-in `ssh` plugin, and ships with a much tighter test suite.
 
 ### Changed
-- Plugin now subclasses `ansible.plugins.connection.ssh.Connection` and merges the live SSH plugin's options into its own `DOCUMENTATION` at import time. This keeps every SSH option (`ansible_ssh_port`, `ansible_ssh_private_key_file`, `ansible_ssh_common_args`, `ControlPersist`, jump hosts, `password_mechanism`, …) in sync with whichever `ansible-core` is installed.
+- Plugin now subclasses `ansible.plugins.connection.ssh.Connection` and merges the live SSH plugin's options into its own `DOCUMENTATION` at import time. This keeps every SSH option (`ansible_ssh_port`, `ansible_ssh_private_key_file`, `ansible_ssh_common_args`, `ControlPersist`, jump hosts, `password_mechanism`, ...) in sync with whichever `ansible-core` is installed.
 - Jail-root resolution (`jls -j <name> path`) is now lazy: it runs on the first file transfer instead of at connect time, saving one round trip for exec-only workloads.
-- `put_file` now completes in a single extra exec (`mkdir -p … && mv …`) instead of two.
+- `put_file` now completes in a single extra exec (`mkdir -p ... && mv ...`) instead of two.
 - Every argument crossing the SSH wire is `shlex.quote`d through a shared helper; remote paths use `posixpath`.
 - Error messages are now concise and actionable. See README "Common error messages".
 

@@ -6,7 +6,7 @@
 | **Fixed in** | `2.0.0` |
 | **Severity** | High |
 | **CWE** | CWE-59 (Improper Link Resolution Before File Access / symlink following), CWE-61 |
-| **Vector (CVSS 3.1)** | `AV:N/AC:H/PR:H/UI:N/S:C/C:H/I:H/A:H` (scope-changed: jail → host) |
+| **Vector (CVSS 3.1)** | `AV:N/AC:H/PR:H/UI:N/S:C/C:H/I:H/A:H` (scope-changed: jail -> host) |
 
 ## Summary
 
@@ -16,7 +16,7 @@ and then created directories and moved the staged file into place by running, **
 root on the host**:
 
 ```
-doas jexec ...        # NO — exec went through jexec, but the transfer did not:
+doas jexec ...        # NO: exec went through jexec, but the transfer did not:
 doas mkdir -p <jail_root>/<dir>
 doas mv <staged> <jail_root>/<dest>
 ```
@@ -54,7 +54,7 @@ within the jail's chroot and cannot reference the host filesystem:
 - `fetch_file`: `jexec <jail> /bin/sh -c 'cat < <src>' > <staged>`, then download
 
 A symlink inside the jail can at most redirect the write/read to another location
-**inside the same jail** — which the jail's own user already controls — and can no
+**inside the same jail** (which the jail's own user already controls) and can no
 longer reach the host.
 
 ## Workarounds
@@ -75,4 +75,4 @@ Found during a security review of the plugin.
 
 ## Timeline
 
-- 2026-06-10 — Issue identified during code review; fix developed and released as 2.0.0.
+- 2026-06-10: Issue identified during code review; fix developed and released as 2.0.0.

@@ -5,7 +5,7 @@
 | Version | Supported |
 |---------|-----------|
 | 2.0.x   | ✅ |
-| < 2.0   | ❌ (contains a known jail-escape vulnerability — see below) |
+| < 2.0   | ❌ (contains a known jail-escape vulnerability, see below) |
 
 ## Reporting a vulnerability
 
@@ -21,7 +21,7 @@ we will coordinate a fix and disclosure timeline with you.
 
 ## Known advisories
 
-- **< 2.0.0 — jail escape via symlink in `put_file`.** File transfers resolved paths on
+- **< 2.0.0: jail escape via symlink in `put_file`.** File transfers resolved paths on
   the host and performed root-owned `mv` operations that followed symlinks placed inside
   a jail, allowing arbitrary root-owned writes on the host. Fixed in 2.0.0 by performing
   all transfers inside the jail via `jexec`. See
