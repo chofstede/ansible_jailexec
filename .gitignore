@@ -165,7 +165,10 @@ cython_debug/
 *.retry
 hosts
 inventory
-test-inventory
+# Local integration-test inventories contain real host addresses/credentials;
+# only the .example template belongs in the repo.
+test-inventory*
+!test-inventory.ini.example
 # Local ansible.cfg used to point Ansible at this checkout for dev/testing.
 ansible.cfg
 

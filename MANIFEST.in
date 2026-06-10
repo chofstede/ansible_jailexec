@@ -3,7 +3,14 @@ include CHANGELOG.md
 include LICENSE
 include requirements-test.txt
 include pytest.ini
-recursive-include tests *.py *.yml *.ini *.example
+recursive-include tests *.py *.yml *.example
 recursive-include tests/integration *.md
 global-exclude __pycache__
 global-exclude *.py[cod]
+# Never ship local integration inventories (they hold real hosts/credentials);
+# only the committed *.example template belongs in the sdist.
+global-exclude test-inventory.ini
+prune dist
+prune build
+prune htmlcov
+prune .venv
