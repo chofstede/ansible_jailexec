@@ -212,6 +212,22 @@ class Connection(SSHConnection):
 
     # ---- connect / lifecycle --------------------------------------------
 
+    def set_options(self, task_keys=None, var_options=None, direct=None):
+        """Re-apply the jail-host redirect whenever options are reloaded.
+
+        Ansible rebuilds a connection plugin's option dict before *every*
+        task and, in a loop, before every single item. That wipes the
+        ``host`` override installed in ``_connect``, and ``_connect``
+        short-circuits on an established connection, so nothing would put
+        it back: from the second loop item on, SSH would target the jail
+        (inventory) name instead of the jail host. Re-applying it here
+        keeps the redirect attached to the option lifecycle itself.
+        """
+        super().set_options(task_keys=task_keys, var_options=var_options, direct=direct)
+        jail_host = (self.get_option("jail_host") or "").strip()
+        if jail_host:
+            self.set_option("host", jail_host)
+
     def _connect(self):
         if self._connected:
             return self

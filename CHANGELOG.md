@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 2026-08-04
+
+### Fixed
+- **The SSH redirect to the jail host is no longer lost when Ansible reloads connection options.** The redirect was installed once in `_connect()`, but ansible-core rebuilds a connection plugin's option dict before every task and before every *loop item*, which reset `host` back to the inventory hostname (the jail name). Since `_connect()` short-circuits on an established connection, nothing restored it, and every command after the first loop item was sent to the jail name instead of the jail host. The redirect is now re-applied in `set_options()`, so it survives each reload. Reported in #7 by @geekobiloba.
+
 ## [2.0.0] - 2026-06-10
 
 **Security release, upgrading is strongly recommended.** The file-transfer mechanism was rewritten to run inside the jail and the release was verified end-to-end against a real FreeBSD 15.0 jail host (`tests/integration/smoke-test.yml`).

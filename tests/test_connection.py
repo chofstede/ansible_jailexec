@@ -32,6 +32,24 @@ class TestConnect:
         assert conn._connected is True
         conn.ssh_exec.assert_not_called()
 
+    def test_host_survives_option_reload(self, make_conn):
+        """Regression, issue #7: loops reload options per item.
+
+        Ansible calls ``set_options`` again for every task and every loop
+        item, rebuilding the option dict from vars. The jail-host redirect
+        has to survive that, or items 2..n SSH to the jail name.
+        """
+        conn = make_conn({"jail_host": "jail.example"})
+        conn._connect()
+        conn.set_options(
+            var_options={
+                "ansible_jail_host": "jail.example",
+                "inventory_hostname": "testjail",
+                "host": "testjail",
+            }
+        )
+        assert conn.get_option("host") == "jail.example"
+
     def test_close_delegates_to_ssh(self, make_conn):
         conn = make_conn()
         conn._connect()
