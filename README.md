@@ -233,6 +233,7 @@ jailexec: fetch_file jail:/var/log/nginx/access.log -> /tmp/access.log
 | `put_file to jail:X failed: ...` | Writing inside the jail failed (permissions, read-only filesystem, full disk). | Check the path and `ansible_jail_user`'s rights inside the jail; use `become` for root-owned paths. |
 | `fetch_file from jail:X failed: ...` | Reading inside the jail failed (missing file, permissions). | Verify the path exists and is readable by `ansible_jail_user`. |
 | `ansible_jail_root is deprecated and ignored` (warning) | Leftover 1.x inventory variable. | Remove `ansible_jail_root`; it is no longer needed. |
+| `Failed to create temporary directory` with `~<ssh-user>` in the failing command | Ansible builds its temp path from the *SSH* user's home directory, but that user usually does not exist inside the jail — and a non-root `ansible_jail_user` cannot write to the jail's `/`. | Set `ansible_remote_tmp=/tmp/.ansible-tmp` (or any jail-writable path) for your jail hosts. |
 
 ## Security considerations
 

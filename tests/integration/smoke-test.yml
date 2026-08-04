@@ -77,6 +77,47 @@
         state: absent
       delegate_to: localhost
 
+    # Regression for #7: Ansible reloads connection options before every loop
+    # item, which used to wipe the plugin's SSH redirect to the jail host, so
+    # everything after the first item went to the jail name instead. A loop of
+    # copies is the exact shape reported in the issue.
+    - name: Copy several files in a loop (exercises per-item option reloads)
+      ansible.builtin.copy:
+        content: "loop item {{ item }}\n"
+        dest: "/tmp/ansible-jailexec-loop-{{ item }}"
+        mode: "0644"
+      loop:
+        - one
+        - two
+        - three
+
+    - name: Read the looped files back
+      ansible.builtin.slurp:
+        src: "/tmp/ansible-jailexec-loop-{{ item }}"
+      register: loop_slurped
+      loop:
+        - one
+        - two
+        - three
+
+    - name: Assert every loop item landed inside the jail
+      ansible.builtin.assert:
+        that:
+          - item.content | b64decode == "loop item " ~ item.item ~ "\n"
+        fail_msg: "Loop item {{ item.item }} did not round-trip correctly"
+      loop: "{{ loop_slurped.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Clean up looped files
+      ansible.builtin.file:
+        path: "/tmp/ansible-jailexec-loop-{{ item }}"
+        state: absent
+      loop:
+        - one
+        - two
+        - three
+
     - name: Test command with specific working directory
       ansible.builtin.command: pwd
       args:

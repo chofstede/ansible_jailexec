@@ -31,6 +31,58 @@ To run the integration tests in GitHub Actions, you need to configure the follow
 3. Click "New repository secret" for each secret
 4. Enter the secret name and value
 
+## Building throwaway test jails
+
+On a FreeBSD 15 host installed from pkgbase, three serviceless jails are enough
+to cover every code path, and cost about 400 MB each:
+
+```sh
+# Host tooling (a minimal pkgbase install ships neither).
+pkg install -y FreeBSD-jail doas
+
+# Jail root from the base repo. pkg resolves the repo fingerprints *inside*
+# the rootdir, so the keys have to be copied in first, or the install fails
+# with "Error opening the trusted directory /usr/share/keys/pkgbase-15/trusted".
+mkdir -p /jails/smokeroot/usr/share/keys
+cp -R /usr/share/keys/ /jails/smokeroot/usr/share/keys/
+pkg --rootdir /jails/smokeroot install -r FreeBSD-base -y FreeBSD-runtime
+pkg --rootdir /jails/smokeroot install -y python3
+
+# pkg --rootdir does not run ldconfig inside the jail, so the interpreter
+# would fail with: Shared object "libpython3.12.so.1.0" not found.
+jail -c smokeroot && jexec smokeroot /sbin/ldconfig -m /usr/local/lib
+```
+
+`/etc/jail.conf` needs no `exec.start` — the jails run no services at all,
+which is all `jexec` requires. `mount.devfs` *is* required, because Python
+wants `/dev/urandom`:
+
+```
+exec.clean;
+mount.devfs;
+persist;
+path = "/jails/$name";
+host.hostname = "$name";
+
+smokeroot { }
+smokeuser { }
+smokealias { }
+```
+
+Useful jail variations for covering the plugin's behaviour:
+
+- **`smokeroot`** — baseline, `ansible_jail_user=root`.
+- **`smokeuser`** — add an in-jail user (`pw -R /jails/smokeuser useradd -n tester -m -s /bin/sh`)
+  so `ansible_jail_user=tester` exercises `jexec -U` against the *jail's* passwd database.
+- **`smokealias`** — reach it under a different inventory hostname via
+  `ansible_jail_name`, with `ansible_host` set to an unroutable TEST-NET address
+  (`192.0.2.99`). The plugin must SSH to `ansible_jail_host` and `jexec` the
+  jail name, never `ansible_host`.
+
+Set `ansible_remote_tmp=/tmp/.ansible-tmp` for these hosts: Ansible otherwise
+builds its temp path from the SSH user's home, which does not exist inside the
+jail.
+
 ## Local Testing
 
 To run the tests locally:
