@@ -3,6 +3,10 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.0.2] - 2026-08-04
+
+Re-release of 2.0.1 with no functional change. The 2.0.1 commit was signed with a committer identity that did not match the signing key, so both GitHub and Codeberg flagged the signature; correcting it required rewriting the commit, and GitHub's immutable-releases feature had already permanently reserved the `v2.0.1` tag name. 2.0.1 and 2.0.2 are byte-identical apart from this changelog entry and the version string — there is no need to upgrade if you already run 2.0.1.
+
 ## [2.0.1] - 2026-08-04
 
 ### Fixed
