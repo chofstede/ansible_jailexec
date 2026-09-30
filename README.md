@@ -15,7 +15,7 @@ The plugin inherits from Ansible's built-in `ssh` connection plugin, so every SS
 - **Everything happens inside the jail**: commands *and file transfers* run through `jexec`, confined to the jail's chroot. A symlink planted inside a jail can never redirect a privileged write or read onto a host path.
 - **Safe by construction**: jail names are validated, paths are traversal-checked and normalized, and every shell argument is `shlex.quote`d.
 - **Minimal host footprint**: the SSH user needs a `doas`/`sudo` rule for exactly one command: `jexec`.
-- **Zero extra round trips for exec-only workloads**: no probing at connect time; `put_file` costs a single extra exec.
+- **Zero extra round trips for exec-only workloads**: no probing at connect time; `put_file` costs two extra execs (private staging directory, then the in-jail write).
 - **`doas`, `sudo`, or `none`** for host-side privilege escalation around `jexec`.
 
 ## Demo
@@ -33,8 +33,8 @@ doas jexec [-U <jail_user>] <jail_name> /bin/sh -c '<command>'
 
 File transfers stage through the host and complete inside the jail:
 
-- **put_file**: upload to a random `/tmp/ansible-jailexec-<hex>` name on the host via SFTP, then `doas jexec <jail> /bin/sh -c 'mkdir -p <dir> && cat > <dest>' < <staged>`; the write resolves entirely within the jail's filesystem namespace.
-- **fetch_file**: `doas jexec <jail> /bin/sh -c 'cat < <src>' > <staged>` (staged copy created with `umask 077`), then download via SFTP and remove the staged copy.
+- **put_file**: create a private (`0700`) staging directory `/tmp/ansible-jailexec-<hex>` on the host, upload into it (SFTP, SCP or piped, per `ssh_transfer_method`), then `doas jexec <jail> /bin/sh -c 'mkdir -p <dir> && cat > <dest>' < <staged>` and remove the directory; the write resolves entirely within the jail's filesystem namespace.
+- **fetch_file**: create the private staging directory and run `doas jexec <jail> /bin/sh -c 'cat < <src>' > <staged>` in one round trip, then download the staged copy and remove the directory.
 
 ## Requirements
 
@@ -240,7 +240,7 @@ jailexec: fetch_file jail:/var/log/nginx/access.log -> /tmp/access.log
 - **Transfers are confined to the jail**: `put_file` and `fetch_file` execute `mkdir`/`cat` *inside* the jail via `jexec`, so all path resolution happens within the jail's chroot. A symlink planted inside a (potentially compromised) jail cannot redirect a privileged write or read to a host path. (Versions before 2.0.0 performed root-owned `mv` operations on host-side paths and were vulnerable to exactly that; upgrade.)
 - **Input validation**: jail names are matched against `^[A-Za-z0-9_][A-Za-z0-9._-]*$` and length-capped at 255. Paths are rejected if any component is `..`, and are normalized to absolute in-jail paths.
 - **Shell safety**: every argument crossing the SSH wire is `shlex.quote`d; the user-supplied command is the final argument to `/bin/sh -c` and is *not* further interpreted by the plugin. Fetched files are read with `cat < file` redirection, ruling out option injection.
-- **File staging**: transfers stage in `/tmp` on the host under a random name (`ansible-jailexec-<hex>`, 96 bits of randomness). Fetched files are staged with `umask 077` so they are never world-readable; staged files are removed even when the transfer fails.
+- **File staging**: transfers stage on the host inside a per-transfer directory `/tmp/ansible-jailexec-<hex>` (96 bits of randomness) created with mode `0700`, so other host users cannot read the payload in transit regardless of the source file's mode or the transfer method. `mkdir` refuses a pre-existing name, and the directory is removed even when the transfer fails. (Versions up to 2.0.2 uploaded `put_file` payloads as bare, often world-readable files in `/tmp`; upgrade.)
 - **Minimal escalation surface**: the only command the SSH user runs via `doas`/`sudo` is `jexec`.
 - **No new network ports**: everything rides the existing SSH connection, including control-persist reuse.
 - **Internal plumbing never engages `become`**: plugin-internal commands run with `sudoable=False`, so they neither wait for become prompts nor allocate pseudo-terminals.

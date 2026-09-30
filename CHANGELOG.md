@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.0.3] - 2026-10-01
+
+**Security release, upgrading is recommended.**
+
+### Security
+- **Staged `put_file` payloads are no longer readable by other users on the jail host** (CWE-378). `put_file` uploaded each file to a bare `/tmp/ansible-jailexec-<hex>` path on the host before writing it into the jail. SFTP and SCP create that file with the *source* file's mode masked by the host's umask, so a `0644` source (e.g. a plaintext key or config committed to a repository and deployed with `copy src=`) was staged as `0644` and could be read by any local account on the jail host until the in-jail write completed. Transfers now stage inside a per-transfer directory created with `umask 077 && mkdir` (mode `0700`); the directory is removed on success and on every failure path. `fetch_file` uses the same directory. Files Ansible generates itself (AnsiballZ module payloads, `template` output, `copy content=`, Vault-decrypted sources) were already created `0600` on the controller and were not exposed via SFTP/SCP. Reported by zx (@manus-pi).
+
+### Fixed
+- **`ssh_transfer_method=piped` works.** The SSH base class moves piped data with `self.exec_command('dd ...')`, which resolved to the plugin's `jexec` wrapper: uploads were written into the *jail's* `/tmp` (with mode `0644`, and never cleaned up) instead of the host staging path, and every piped `put_file`/`fetch_file` failed. The same happened when `smart` fell back to `piped`. Transport commands now run on the host.
+
+### Changed
+- `put_file` costs one extra round trip (creating the private staging directory); `fetch_file` round trips are unchanged.
+
 ## [2.0.2] - 2026-08-04
 
 Re-release of 2.0.1 with no functional change. The 2.0.1 commit was signed with a committer identity that did not match the signing key, so both GitHub and Codeberg flagged the signature; correcting it required rewriting the commit, and GitHub's immutable-releases feature had already permanently reserved the `v2.0.1` tag name. 2.0.1 and 2.0.2 are byte-identical apart from this changelog entry and the version string — there is no need to upgrade if you already run 2.0.1.

@@ -15,6 +15,7 @@ import os
 import posixpath
 import re
 import shlex
+from contextlib import contextmanager
 
 import yaml
 from ansible.errors import AnsibleConnectionFailure, AnsibleError
@@ -118,6 +119,8 @@ PRIVESC_CHOICES = ("doas", "sudo", "none")
 # does not apply.
 STAGING_DIR = "/tmp"  # nosec B108
 STAGING_PREFIX = "ansible-jailexec-"
+# File name of the payload inside the private per-transfer staging directory.
+STAGED_NAME = "payload"
 
 
 def validate_jail_name(name):
@@ -162,6 +165,8 @@ class Connection(SSHConnection):
     """SSH to a jail host, run commands inside the jail via jexec."""
 
     transport = "jailexec"
+    # True while the SSH base class moves a file; see _host_transport.
+    _on_host = False
     has_pipelining = True
 
     # ---- options ---------------------------------------------------------
@@ -271,9 +276,45 @@ class Connection(SSHConnection):
     def _staging_path():
         return posixpath.join(STAGING_DIR, f"{STAGING_PREFIX}{os.urandom(12).hex()}")
 
+    def _staging_dir_cmd(self, staging):
+        """Shell snippet that creates ``staging`` as a private (0700) dir.
+
+        Staging goes through a private directory rather than a bare file in
+        ``/tmp``: SFTP and SCP create the upload with the *source* file's
+        mode (masked by the remote umask), and the piped method's ``dd``
+        with 0666, so a bare staged file would routinely be world-readable
+        on the host. Inside a 0700 directory other host users cannot reach
+        the payload whatever its mode. ``mkdir`` also fails if the name
+        already exists, so a pre-planted file or symlink cannot hijack it.
+        """
+        return f"umask 077 && mkdir {shlex.quote(staging)}"
+
+    def _cleanup_staging(self, staging):
+        # Best-effort: the return code is ignored so it cannot mask the
+        # error that triggered the cleanup.
+        super().exec_command(f"rm -rf {shlex.quote(staging)}", sudoable=False)
+
+    @contextmanager
+    def _host_transport(self):
+        """Run the SSH base class's file transport against the *host*.
+
+        With ``ssh_transfer_method=piped`` (or ``smart`` falling back to it),
+        the base class moves data with ``self.exec_command('dd ...')``, which
+        would resolve to our jexec-wrapping override and land the staged
+        file inside the jail instead of in the host-side staging directory.
+        """
+        self._on_host = True
+        try:
+            yield
+        finally:
+            self._on_host = False
+
     # ---- exec / transfer -------------------------------------------------
 
     def exec_command(self, cmd, in_data=None, sudoable=True):
+        if self._on_host:
+            return super().exec_command(cmd, in_data=in_data, sudoable=sudoable)
+
         if not cmd or not str(cmd).strip():
             raise AnsibleError("Command cannot be empty")
 
@@ -284,32 +325,45 @@ class Connection(SSHConnection):
 
     def put_file(self, in_path, out_path):
         dest = self._in_jail_path(out_path)
-        staged = self._staging_path()
+        staging = self._staging_path()
+        staged = posixpath.join(staging, STAGED_NAME)
 
         display.vvv(
             f"jailexec: put_file {in_path} -> jail:{out_path}", host=self.jail_name
         )
-        super().put_file(in_path, staged)
+        # sudoable=False keeps the SSH layer from waiting for an Ansible
+        # become prompt (and from allocating a tty) on plugin-internal
+        # commands; same below.
+        rc, _, stderr = super().exec_command(
+            self._staging_dir_cmd(staging), sudoable=False
+        )
+        if rc != 0:
+            raise AnsibleError(
+                f"put_file to jail:{out_path} failed to create staging "
+                f"directory {staging}: {_decode(stderr).strip() or 'unknown error'}"
+            )
+        try:
+            with self._host_transport():
+                super().put_file(in_path, staged)
+        except BaseException:
+            self._cleanup_staging(staging)
+            raise
         # The write happens *inside* the jail: jexec confines mkdir/cat to
         # the jail's root, so a symlink planted inside the jail cannot
         # redirect a privileged write onto a host path. The staged file is
         # handed over as stdin, opened host-side by the unprivileged SSH
-        # login shell. Single extra round trip on the happy path.
+        # login shell.
         inner = (
             f"mkdir -p {shlex.quote(posixpath.dirname(dest))} && "
             f"cat > {shlex.quote(dest)}"
         )
         transfer = (
             f"{_shelljoin(*self._jexec_argv(), '/bin/sh', '-c', inner)}"
-            f" < {shlex.quote(staged)} && rm -f {shlex.quote(staged)}"
+            f" < {shlex.quote(staged)} && rm -rf {shlex.quote(staging)}"
         )
-        # sudoable=False keeps the SSH layer from waiting for an Ansible
-        # become prompt (and from allocating a tty) on plugin-internal
-        # commands; same below.
         rc, _, stderr = super().exec_command(transfer, sudoable=False)
         if rc != 0:
-            # Best-effort cleanup of the orphan staged file; ignore failures.
-            super().exec_command(f"rm -f {shlex.quote(staged)}", sudoable=False)
+            self._cleanup_staging(staging)
             raise AnsibleError(
                 f"put_file to jail:{out_path} failed: "
                 f"{_decode(stderr).strip() or 'unknown error'}"
@@ -317,7 +371,8 @@ class Connection(SSHConnection):
 
     def fetch_file(self, in_path, out_path):
         src = self._in_jail_path(in_path)
-        staged = self._staging_path()
+        staging = self._staging_path()
+        staged = posixpath.join(staging, STAGED_NAME)
 
         display.vvv(
             f"jailexec: fetch_file jail:{in_path} -> {out_path}", host=self.jail_name
@@ -325,21 +380,22 @@ class Connection(SSHConnection):
         # Mirror image of put_file: read inside the jail (symlinks cannot
         # leak host files, and root-only files are readable when jail_user
         # is root), stage on the host, then pull the staged copy over SFTP.
-        # ``cat < src`` instead of an argument rules out option injection;
-        # umask keeps the staged copy private to the SSH user.
+        # ``cat < src`` instead of an argument rules out option injection.
+        # The private staging directory is created in the same round trip.
         inner = f"cat < {shlex.quote(src)}"
         read = (
-            f"umask 077; {_shelljoin(*self._jexec_argv(), '/bin/sh', '-c', inner)}"
+            f"{self._staging_dir_cmd(staging)} && "
+            f"{_shelljoin(*self._jexec_argv(), '/bin/sh', '-c', inner)}"
             f" > {shlex.quote(staged)}"
         )
-        rc, _, stderr = super().exec_command(read, sudoable=False)
-        if rc != 0:
-            super().exec_command(f"rm -f {shlex.quote(staged)}", sudoable=False)
-            raise AnsibleError(
-                f"fetch_file from jail:{in_path} failed: "
-                f"{_decode(stderr).strip() or 'unknown error'}"
-            )
         try:
-            super().fetch_file(staged, out_path)
+            rc, _, stderr = super().exec_command(read, sudoable=False)
+            if rc != 0:
+                raise AnsibleError(
+                    f"fetch_file from jail:{in_path} failed: "
+                    f"{_decode(stderr).strip() or 'unknown error'}"
+                )
+            with self._host_transport():
+                super().fetch_file(staged, out_path)
         finally:
-            super().exec_command(f"rm -f {shlex.quote(staged)}", sudoable=False)
+            self._cleanup_staging(staging)

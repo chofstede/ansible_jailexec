@@ -11,7 +11,7 @@ with open(os.path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 
 setup(
     name='ansible-jailexec',
-    version='2.0.2',
+    version='2.0.3',
     author='Christian Hofstede-Kuhn',
     author_email='christian@hofstede.it',
     description='Ansible connection plugin for FreeBSD jails via jexec over SSH',
