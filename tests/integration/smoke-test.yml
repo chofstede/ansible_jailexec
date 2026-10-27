@@ -118,6 +118,32 @@
         - two
         - three
 
+    # Regression for #8: on a delegated task ansible-core pins
+    # inventory_hostname to the original host, and the plugin used to run the
+    # task in that host's jail. Each jail delegates to the next one of the
+    # play (so an ansible_jail_name alias is a target too) and compares with
+    # the hostname that jail reported for itself above. With a single jail
+    # it delegates to itself, which still exercises the code path.
+    - name: Pick the next jail of the play as delegation target
+      ansible.builtin.set_fact:
+        delegate_target: >-
+          {{ ansible_play_hosts[(ansible_play_hosts.index(inventory_hostname) + 1)
+                                % (ansible_play_hosts | length)] }}
+
+    - name: Get hostname of another jail via delegate_to
+      ansible.builtin.command: hostname
+      delegate_to: "{{ delegate_target }}"
+      register: delegated_hostname
+      changed_when: false
+
+    - name: Assert the delegated task ran in the delegated jail
+      ansible.builtin.assert:
+        that:
+          - delegated_hostname.stdout == hostvars[delegate_target].hostname_result.stdout
+        fail_msg: >-
+          delegate_to {{ delegate_target }} ran in jail
+          '{{ delegated_hostname.stdout }}' instead
+
     - name: Test command with specific working directory
       ansible.builtin.command: pwd
       args:

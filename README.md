@@ -86,7 +86,7 @@ db-jail   ansible_connection=jailexec  ansible_jail_host=jail-host.example.com  
 app-jail  ansible_connection=jailexec  ansible_jail_host=jail-host.example.com  ansible_ssh_port=30822
 ```
 
-The inventory hostname (`web-jail`, `db-jail`, ...) doubles as the jail name unless you override it with `ansible_jail_name`. Setting `ansible_host` does not affect the jail name; it is an SSH-level alias for the jail host's address, like `ansible_jail_host`.
+The inventory hostname (`web-jail`, `db-jail`, ...) doubles as the jail name unless you override it with `ansible_jail_name`. Tasks with `delegate_to` run in the delegated host's jail (or in its `ansible_jail_name`). Setting `ansible_host` does not affect the jail name; it is an SSH-level alias for the jail host's address, like `ansible_jail_host`.
 
 ### 2. Ping
 

@@ -115,6 +115,43 @@ class TestProperties:
         )
         assert conn.jail_name == "blog"
 
+    def test_delegate_to_selects_delegated_jail(self, make_conn):
+        """Regression, issue #8: on a delegated task ansible-core sets
+        inventory_hostname to the *original* host, so the plugin ran the
+        task in that host's jail instead of the delegated one."""
+        conn = make_conn()
+        conn.set_options(
+            task_keys={"delegate_to": "jail_a"},
+            var_options={
+                "ansible_jail_host": "jail-host.example.com",
+                "inventory_hostname": "jail_b",
+            },
+        )
+        assert conn.jail_name == "jail_a"
+
+    def test_explicit_jail_name_beats_delegate_to(self, make_conn):
+        conn = make_conn()
+        conn.set_options(
+            task_keys={"delegate_to": "alias"},
+            var_options={
+                "ansible_jail_host": "jail-host.example.com",
+                "inventory_hostname": "jail_b",
+                "ansible_jail_name": "jail_a",
+            },
+        )
+        assert conn.jail_name == "jail_a"
+
+    def test_undelegated_task_keeps_inventory_hostname(self, make_conn):
+        conn = make_conn()
+        conn.set_options(
+            task_keys={"delegate_to": None},
+            var_options={
+                "ansible_jail_host": "jail-host.example.com",
+                "inventory_hostname": "jail_b",
+            },
+        )
+        assert conn.jail_name == "jail_b"
+
     def test_jail_user_default(self, make_conn):
         assert make_conn().jail_user == "root"
 

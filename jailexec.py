@@ -46,6 +46,8 @@ DOCUMENTATION = """
             description:
                 - Jail name. Defaults to the inventory hostname (not to
                   ansible_host, which is the address of the jail host).
+                - On a task with C(delegate_to), the default is the
+                  delegated host's name.
             type: str
             vars:
                 # Later entries win: an explicit ansible_jail_name overrides
@@ -229,6 +231,13 @@ class Connection(SSHConnection):
         keeps the redirect attached to the option lifecycle itself.
         """
         super().set_options(task_keys=task_keys, var_options=var_options, direct=direct)
+        # On a delegated task ansible-core pins inventory_hostname to the
+        # *original* host, so the default would jexec into that host's jail
+        # on the delegated jail host. Use the delegated host's name instead,
+        # unless it sets ansible_jail_name.
+        delegate_to = (task_keys or {}).get("delegate_to")
+        if delegate_to and "ansible_jail_name" not in (var_options or {}):
+            self.set_option("jail_name", delegate_to)
         jail_host = (self.get_option("jail_host") or "").strip()
         if jail_host:
             self.set_option("host", jail_host)
